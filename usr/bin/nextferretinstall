@@ -76,7 +76,8 @@ TEXT = {
         "pass": "Password", "pass_c": "Confirm Password", "err_pass": "Passwords do not match or are empty.", "err_disk": "Please select a target disk.",
         "err_user": "Username and Hostname are required.", "summary_title": "Installation Summary", "summary_warn": "Warning: All data on the selected drive will be permanently erased.",
         "finish_msg": "Installation Complete", "finish_sub": "Arvor Linux has been successfully installed. Remove the media and reboot.",
-        "warn_vm": "Virtual Machine Detected", "warn_power": "Running on Battery", "net_err": "No Internet Connection detected. Installation requires an active connection."
+        "warn_vm": "Virtual Machine Detected", "warn_power": "Running on Battery", "net_err": "No Internet Connection detected. Installation requires an active connection.",
+        "lbl_key_test": "Keyboard Test", "test_keymap": "Type here to test your keyboard layout..."
     },
     "pt": {
         "title": "Instalador Arvor Linux", "step_welcome": "Bem-vindo", "step_location": "Localização", "step_keyboard": "Teclado",
@@ -86,9 +87,10 @@ TEXT = {
         "locale": "Idioma", "tz": "Fuso Horário", "keymap": "Layout", "de": "Ambiente Gráfico", "disk": "Disco de Destino",
         "luks": "Criptografia de Disco (LUKS)", "luks_p": "Senha da Criptografia", "host": "Nome do Computador", "user_name": "Nome de usuário (sem espaços)",
         "pass": "Senha", "pass_c": "Confirmar Senha", "err_pass": "Senhas não conferem.", "err_disk": "Selecione um disco.",
-        "err_user": "Nome de usuário e hostname são obrigatórios.", "summary_title": "Resumo da Instalação", "summary_warn": "Aviso: Todos os dados no disco selecionado serão apagados.",
+        "err_user": "Nome de usuário e hostname são obrigatórios.", "summary_title": "Resumo da Instalacão", "summary_warn": "Aviso: Todos os dados no disco selecionado serão apagados.",
         "finish_msg": "Instalação Concluída", "finish_sub": "O Arvor Linux foi instalado com sucesso. Remova a mídia e reinicie.",
-        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Rodando na Bateria", "net_err": "Sem conexão com a Internet. A instalação requer rede ativa."
+        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Rodando na Bateria", "net_err": "Sem conexão com a Internet. A instalação requer rede ativa.",
+        "lbl_key_test": "Teste do Teclado", "test_keymap": "Digite aqui para testar o layout do teclado..."
     },
     "es": {
         "title": "Instalador Arvor Linux", "step_welcome": "Bienvenido", "step_location": "Ubicación", "step_keyboard": "Teclado",
@@ -100,7 +102,8 @@ TEXT = {
         "pass": "Contraseña", "pass_c": "Confirmar Contraseña", "err_pass": "Las contraseñas no coinciden.", "err_disk": "Seleccione un disco.",
         "err_user": "Nombre de usuario y hostname son obligatorios.", "summary_title": "Resumen de Instalación", "summary_warn": "Aviso: Todos los datos en el disco seleccionado serán eliminados.",
         "finish_msg": "Instalación Completada", "finish_sub": "Arvor Linux se instaló correctamente. Retire el medio y reinicie.",
-        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Ejecutando con Batería", "net_err": "No se detectó conexión a Internet."
+        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Ejecutando con Batería", "net_err": "No se detectó conexión a Internet.",
+        "lbl_key_test": "Prueba de Teclado", "test_keymap": "Escriba aquí para probar la distribución de teclado..."
     },
     "fr": {
         "title": "Programme d'installation Arvor Linux", "step_welcome": "Bienvenue", "step_location": "Emplacement", "step_keyboard": "Clavier",
@@ -112,7 +115,8 @@ TEXT = {
         "pass": "Mot de passe", "pass_c": "Confirmer le mot de passe", "err_pass": "Les mots de passe ne correspondent pas.", "err_disk": "Veuillez sélectionner un disque.",
         "err_user": "Nom d'utilisateur et hostname requis.", "summary_title": "Résumé de l'installation", "summary_warn": "Avertissement : Toutes les données sur le disque seront effacées.",
         "finish_msg": "Installation Terminée", "finish_sub": "Arvor Linux a été installé. Retirez le support et redémarrez.",
-        "warn_vm": "Machine Virtuelle Détectée", "warn_power": "Fonctionnement sur Batterie", "net_err": "Pas de connexion Internet."
+        "warn_vm": "Machine Virtuelle Détectée", "warn_power": "Fonctionnement sur Batterie", "net_err": "Pas de connexion Internet.",
+        "lbl_key_test": "Test du Clavier", "test_keymap": "Tapez ici pour tester la disposition de votre clavier..."
     },
     "de": {
         "title": "Arvor Linux Installationsprogramm", "step_welcome": "Willkommen", "step_location": "Standort", "step_keyboard": "Tastatur",
@@ -124,7 +128,8 @@ TEXT = {
         "pass": "Passwort", "pass_c": "Passwort bestätigen", "err_pass": "Passwörter stimmen nicht überein.", "err_disk": "Bitte wählen Sie eine Festplatte aus.",
         "err_user": "Benutzername und Hostname sind erforderlich.", "summary_title": "Zusammenfassung", "summary_warn": "Warnung: Alle Daten auf der ausgewählten Festplatte werden gelöscht.",
         "finish_msg": "Installation Abgeschlossen", "finish_sub": "Arvor Linux wurde erfolgreich installiert. Entfernen Sie das Medium und starten Sie neu.",
-        "warn_vm": "Virtuelle Maschine Erkannt", "warn_power": "Akkubetrieb Erkannt", "net_err": "Keine Internetverbindung erkannt."
+        "warn_vm": "Virtuelle Maschine Erkannt", "warn_power": "Akkubetrieb Erkannt", "net_err": "Keine Internetverbindung erkannt.",
+        "lbl_key_test": "Tastaturtest", "test_keymap": "Hier tippen, um das Tastaturlayout zu testen..."
     },
     "gl": {
         "title": "Instalador Arvor Linux", "step_welcome": "Benvido", "step_location": "Localización", "step_keyboard": "Teclado",
@@ -136,7 +141,8 @@ TEXT = {
         "pass": "Contrasinal", "pass_c": "Confirmar Contrasinal", "err_pass": "Os contrasinais non coinciden.", "err_disk": "Seleccione unha unidade.",
         "err_user": "Nome de usuario e hostname son obrigatorios.", "summary_title": "Resumo da Instalación", "summary_warn": "Aviso: Todos os datos na unidade seleccionada serán eliminados.",
         "finish_msg": "Instalación Completada", "finish_sub": "Arvor Linux instalouse correctamente. Retire o medio e reinicie.",
-        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Executando con Batería", "net_err": "Non se detectou conexión a Internet."
+        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Executando con Batería", "net_err": "Non se detectou conexión a Internet.",
+        "lbl_key_test": "Praba do Teclado", "test_keymap": "Escriba aquí para probar a súa distribución de teclado..."
     }
 }
 
@@ -309,8 +315,25 @@ class InstallWorker(QThread):
 
         self.run_cmd(f"pvcreate -ff -y {lvm_dev}")
         self.run_cmd(f"vgcreate arvor_vg {lvm_dev}")
-        pool_size = Sys.run("vgs --noheadings --units b -o vg_size arvor_vg 2>/dev/null | awk '{gsub(/B/,\"\"); print int($1 * 0.78)}'")
-        pool_vsize = f"{int(pool_size) // (1024*1024)}M" if pool_size and pool_size.isdigit() else "10G"
+        
+        vg_size_str = Sys.run("vgs --noheadings --units b --nosuffix -o vg_size arvor_vg", check=False)
+        try:
+            if not vg_size_str:
+                raise ValueError("No output returned from vgs command")
+            clean_str = vg_size_str.strip().rstrip("B").rstrip("b")
+            vg_size_bytes = int(float(clean_str))
+            if vg_size_bytes <= 0:
+                raise ValueError(f"Invalid VG size: {vg_size_bytes}")
+            pool_bytes = int(vg_size_bytes * 0.78)
+            pool_mb = pool_bytes // (1024 * 1024)
+            if pool_mb <= 0:
+                raise ValueError(f"Calculated thin pool size is too small: {pool_mb}MB")
+            pool_vsize = f"{pool_mb}M"
+        except Exception as e:
+            self.log_msg.emit(f"ERROR: Failed to calculate VG thin pool size ({e}). Aborting installation.")
+            self.finished.emit(False)
+            return
+
         self.run_cmd(f"lvcreate -L {pool_vsize} -T arvor_vg/arvor_thin_pool")
         self.run_cmd(f"lvcreate -V {pool_vsize} -T arvor_vg/arvor_thin_pool -n root")
         self.run_cmd("lvchange -ay arvor_vg/root")
@@ -784,6 +807,8 @@ class InstallerGUI(QMainWindow):
         self.lbl_loc.setText(self.t("locale"))
         self.lbl_tz.setText(self.t("tz"))
         self.lbl_key.setText(self.t("keymap"))
+        self.lbl_key_test.setText(self.t("lbl_key_test"))
+        self.i_key_test.setPlaceholderText(self.t("test_keymap"))
         self.lbl_de.setText(self.t("de"))
         self.lbl_disk.setText(self.t("disk"))
         self.chk_luks.setText(self.t("luks"))
@@ -841,13 +866,26 @@ class InstallerGUI(QMainWindow):
         self.c_key = QComboBox()
         self.c_key.addItems(self.list_of_keymaps)
         self.c_key.setCurrentText(self.conf["keymap"])
+        self.c_key.currentTextChanged.connect(self.on_keymap_changed)
+
+        self.lbl_key_test = self._create_label("lbl_key_test")
+        self.i_key_test = QLineEdit()
+        self.i_key_test.setPlaceholderText(self.t("test_keymap"))
 
         cl.addWidget(self.lbl_key)
         cl.addWidget(self.c_key)
+        cl.addSpacing(15)
+        cl.addWidget(self.lbl_key_test)
+        cl.addWidget(self.i_key_test)
         l.addWidget(card)
         l.addStretch()
         w.setLayout(l)
         return w
+
+    def on_keymap_changed(self, keymap):
+        self.conf["keymap"] = keymap
+        if not SIMULATE:
+            Sys.run(f"setxkbmap {keymap}", check=False)
 
     def create_desktop_page(self):
         w = QWidget()
