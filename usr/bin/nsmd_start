@@ -19,6 +19,7 @@
 #define STATE_FILE "/nsm/daemon/state"
 #define CMD_BUFFER_SIZE 4096
 #define NOTIFICATION_MESSAGE "The Automatic snapshot was been canceled due to prevent OOM Killer,close some apps to create the snapshot"
+#define NOTIFICATION_THIN_POOL_LOW "The Automatic snapshot was canceled because thin pool free space is below 20%"
 
 typedef struct {
     int returncode;
@@ -224,6 +225,59 @@ bool read_memory_state(double* free_ram_percent, double* swap_usage_percent) {
     return true;
 }
 
+bool get_root_device_path(char* dev_out, size_t sz) {
+    FILE* f = fopen("/proc/mounts", "r");
+    if (!f) return false;
+    char line[512];
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+        char d[256], mp[256];
+        if (sscanf(line, "%255s %255s", d, mp) == 2) {
+            if (strcmp(mp, "/") == 0) {
+                strncpy(dev_out, d, sz - 1);
+                dev_out[sz - 1] = '\0';
+                found = true;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+bool read_thin_pool_free_percent(double* free_percent) {
+    CmdResult res = run_cmd("lvs --noheadings --nosuffix -o data_percent arvor_vg/arvor_thin_pool 2>/dev/null");
+    if (res.returncode != 0 || strlen(res.stdout_data) == 0) {
+        char root_dev[256] = "";
+        if (get_root_device_path(root_dev, sizeof(root_dev))) {
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd), "lvs --noheadings --nosuffix -o vg_name,pool_lv %s 2>/dev/null", root_dev);
+            res = run_cmd(cmd);
+            if (res.returncode == 0 && strlen(res.stdout_data) > 0) {
+                char vg[128] = "", pool[128] = "";
+                if (sscanf(res.stdout_data, "%127s %127s", vg, pool) == 2 && strlen(vg) > 0 && strlen(pool) > 0) {
+                    snprintf(cmd, sizeof(cmd), "lvs --noheadings --nosuffix -o data_percent %s/%s 2>/dev/null", vg, pool);
+                    res = run_cmd(cmd);
+                }
+            }
+        }
+    }
+    if (res.returncode != 0 || strlen(res.stdout_data) == 0) return false;
+
+    for (char* p = res.stdout_data; *p; p++) {
+        if (*p == ',') *p = '.';
+    }
+
+    double used_percent = 0.0;
+    if (sscanf(res.stdout_data, "%lf", &used_percent) != 1) return false;
+
+    if (used_percent < 0.0) used_percent = 0.0;
+    if (used_percent > 100.0) used_percent = 100.0;
+
+    *free_percent = 100.0 - used_percent;
+    return true;
+}
+
 bool system_resources_ok(void) {
 #ifdef sim
     return false;
@@ -364,6 +418,13 @@ int run_daemon_loop(const char* nf_tree_path) {
         if (!get_current_state(&current_state)) continue;
         bool changed = current_state.root_hash != previous_state.root_hash || current_state.home_hash != previous_state.home_hash;
         if (!changed) continue;
+
+        double thin_free_percent = 0.0;
+        if (read_thin_pool_free_percent(&thin_free_percent) && thin_free_percent < 20.0) {
+            send_notification(NOTIFICATION_THIN_POOL_LOW);
+            continue;
+        }
+
         if (!system_resources_ok()) {
             send_notification(NOTIFICATION_MESSAGE);
             continue;

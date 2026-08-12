@@ -10,6 +10,7 @@ import socket
 import tempfile
 import urllib.request
 import time
+import base64
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QComboBox,
                              QLineEdit, QCheckBox, QStackedWidget, QMessageBox,
@@ -77,6 +78,8 @@ QTextEdit[log="true"]{background:#131d2d;color:#68d391;border:none;border-radius
 QProgressBar{background:#e4eaf2;border:none;border-radius:6px;height:12px;text-align:center;}
 QProgressBar::chunk{border-radius:6px;background:#4a78ff;}
 """
+
+ARVOR_LOGO_PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAAZY0lEQVR4nO2de7BkRX3HP33vXRa0WFYBWVlQd4HFBVYWDEkECtGyirVKTMUYHsaYIClJWcViqkxYK5BYYglZEhGrEiHERwQDKSsayQMwCIgSHyBBeT9WUJR1wdQiFht39977zR/dvafvuWdmzpk5M+fVn6qpuXfmTPfv9Pn9un/d/etuiEwcSdPu/QxJZ4SfRSaLqVqAriHJYMt9CnjIfXwUMA/IGKOqZItExo6kGfd+nhLOC7+LRFqJJCNpStJySVslzbvXVvfZlGshIpH2Efj+l7maf7d7SdJl4TWRSKvwtbuk1ZJ2SJoLWoA599kq30pULW8kUipB7X+Dq/Fngz6A//uG8NpIpBUEyv+GDOVPG8GJ4W8ikcYTGMBdOQzgrvA3kUijCZT/zD7KnzaCM8PfRiKNRMmw5z6Stijp8PbCd4y3uN/EYdFIc1Ey6XVhjto/3Qpc6H4bW4FI81Ay7LlC0vagdh+EbyW2u9/GYdFI81Di+19VoPZPtwJXhWlFIo1A0rSrudfJzvTmrf3TrcBul4aJRhBpDEHtf9MQtX+6FbgpTDMSqTWB8m8YQfnTRrAhTDsSqSVKhj1nJP1A1pUZ1QDmXVozisOikTqjpPY/L1DgUfFpnBfmESmHWJuUhJKVXsuAh4GDAGFXfo3CvEt3G7AWeIG4cqw04vhyeUwZY+aBTcAKYI5yynfKpbUC2OTyiM+tJGILUAKyE1UCXgM8CCzFlm1Z5Sv32gkcAzwJGGcMkRGINUk5GOeSXArsg1XWMisX49LcB/iYyytWXpHqCTq+J5bY8R3UIY5rBkoitgDlcfkE8/rrCeYViWSjYrH+ZbcCcc1ACUQ/ckiUDHsuBR4AVlHOsOcg/LDok9gO8U7isOjQRBdoePyw50ZgNVYxJ1GeUy6v1cDGOCw6GrEFGAIlw54HYSe9llHusOdAEdzrBezk2DbisOhQxJpjOPyw54eB5SRuycTyd3kuBz4ch0WHJxZaQVyncx7rf9+LrUQmWfvvEcW95oHjsf2QKWPM3ITlaDSxBRgCV+NuBmYof9Irtxgu7xlgc+wER8aOyo31L4u4ZmAEoguUEy3c1/9erAs0D1StcD7o7gGsKxTPGShAdIHyM+1GWc4F1lEP5QcrwzxWpnOdjHWQqxHEFiAHWhzr/wr3VV0qED/8+SxxzUAh6vIA60461r9uk09+ciyuGShIbAEGoPHH+pdFXDMwBLGWGMy4Y/3LIq4ZGIJYQH2QNG2MmZONv78LO+JS9w6ml/EkY8x/+3uoWqi6EluAfEwy1r8smijzxIkG0IOg9j8TOJFm1P5gZZwDTpR0pruHJshdCdEFykDVxfqXRVwzkJOmPNBJM11RrH9ZZK0ZiK1ABrEFSKFkL/5XUE2sf1mk1ww8CxCHRRfSpFptUvix8w9TTax/WaTXDDT1PsZKLJCAYNJrUrH+3icfZ/rpNQNxciwgtgALMROK9Z8L0vYTWOMYq89aMxArvYBYGI5g2HMDcBPlD3v6mti3KgBPuffX9LmmDPy9vNUYc3OcHEuILQB7hj0le6rjZhLXpJTkgVmsQk+79/8CfgvYCvwMeDvw1dQ1s2OQY7O7RymeMxDxKDnOtMx9/edS6eyQdJ2kk11e1wXfXec+O1nStZJeDL6bVf+zhfOSPmdgproSj9QGJae6LJe01SnbKAo3q4WK/4ykyyStCfK83n23270k6Ybg+zXuN88E6aQNqij+vrbK3ms8bSayYJ3vZYFSFsUfhRSeBHm/pI2S9k/ld437fldwrf/7mtS1+0s6X/aIpH555cXf22XhvUc6ipLDrFfJuijDHGeaNphbJf2OpCVBPnu7983uml1ajP/s8vA37u8lLs1bMxR6mONXd0harXgId7dRUvvf4BQkr4uR5d9fK+mkVPozkvZyf18UKG0v/HcXu9/spZSvLrsN++ddnp4i/QQv9w1hGUQ6hobb17+Xf39EkK5RclD2EvfZxkDB+9XYYYtygfvtkjDNIJ8jNHw/IZ4z0HWUGMBdKaXIUsos//58Bf69U9Cp4H+v/OcE6edxV8KjVd8bpuX+ngoVVkk/4f4BMof49O8KyyLSEZRvX/+8/v2MUn60kmHVdwbpF/XVvUzvDNMM8pgKP1PxfkI8Z6CLKBn23EfSFiUdQ08R/37RMGKg/Buc8hXtWHu8XLuV7Pq2aOze3U9WP+Fa9e8neLm2uLKIw6JdIFDQC50i7O6hIM9I+iv18O8HpH2y7GRW2riK4pV0h5IJtMwJrCzZNLif4O/9wn5pR1qCq+WmJK2QtN0pwi4NGL9Xyr/vkbZ3q9a7tL2yjYpPY7uk9WFeA+4zTz9hlyuD7a5MpgbdZ6TBBEr6KS2unXP59wPSXSM70yqVu3GuT2ur3IzyICNw1+TpJ/hW5lN50400kEBJ1wYP/0UV8O8HpHuIpB+OQfnTRvCkpEPDvHPI2K+fEMYdrS2SbqRByNWGkr4t6VlJl6qAf98rTfd+oKQHx6j8Hp/2g5IODGXIKW+vfsLHJG2T9B3lbPUiDSJQ1HWSNqmgfz8gzWWSvusUc5g4oqL4PL4raVkoS1H5tbCf8HLZgYF1w6YZqTlaWPMNXdMpiSFaKun2CSq/x+d1u5Nh6JgepfoJkZajgm5Oxu/9PMKUpBsrUH6Pz/PfAnlGva/o+0d6EyqJpC84BcyK7JwUPu9/cjKNZNyRSE8UjKTIDqOGClglXoarnGy5R7AikdwoUf7LU4pXB9JrCaJPHykPJcp/sVO0Knz+QaTXEkQjiIyOkrDmCwJFGya4bdxkriWotvQijUaLY/rrqvye0AgWrSWIRHKjRPmHjemvioFrCSIJcbQgA0kzxphZSacB/8749wgtm3BP0LcZY27x91SxXLWjKQ90YgTKfzJwC8nBeE0LDfC7Qf8fcJox5pvRCBYTDSAgUP7jgNtItkdvmvJ7vOzPA282xvxPNIKFRANwKNkcdw3wdeyh0005F6wf3gi2AacYYx7z91qxXLWgqTVbqQTKfyhwM+1RfrDPeA44CLhF0qHx4LyEzhuApCmnEAdgt0VfRXuU3+NPjnwNcLOkA909d/75d7oAnPLPS9oX+E/gaOy25G1Sfs809t6OAv5D0r7u3jutA529effgJWkpcCNwAlZB2jxmPoO9xxOAG2X3H1WXjaCTN64kWtIAXwROpf3K7/FGcCr23g0sXCzUJTpnAO5BT7mD4q4FTgd20w3l98xg7/ltwHWuLDq5MVanDMA9YD/icxXwLqwidDFeZgn23s+WdLUbFu3cgppOGQBW+WclbQbOo7vK7/FG8D5Jl7sJsjYOAPSkMwYgaYlT/ouAP8X6wV1Wfs8SbFl8UNLFrow64w52orlzyr9bNk7+EyRDnZ24/xz4c4pngA8YY670ZVaxXGOn9QoQKP85wGeIyt+L0AjONcZ8pgtG0GolCJT/ndghvznKP4S6TfgQ6mngDGPMF9tuBK1VhBbE9FdFuJbgdHeyfGsjSFupDIHyn4Q9gb2pMf1V0Zm1BK0zgED512Nj+l9Gs2P6q6ITawlaZQAtjumvCl92rV1L0JpaseUx/VXhw6j9WoJXtW0tQStagCCs+QBszX8U9VZ+38n0FZD/u67Pw5flQ8CpxpjnfJlXLNfI1LXAc5OK6f8a9Qxr9gov+s9B+LF4Q/0MwpfpPdg+wS/bYAR1KuDC+Jh+YC/saq43UQ/lD4cSDYtbomewO04c5f5/EDgNWJm6bp6FrUPVz8uX7R3ABmAXYJpsBI3tA2TE9Fet/PMu/7AGn8Eq/y+A24GPAG/Arjz7MbDOvZ4GjnHffcRd+4sgDW8Acy6PqhSudWsJGil4ENM/J7s3/tlMXvlDtyad7y7gAeBOrDLfbYzZCvY8MeCfsQYbcgd29vU5d90KrDv3JuAUrIEsTf1mlmrcJV/W1xtj3uU6xfPGGE1Qhm6ihfv0X+W2AJzEVuV+y8Fe+4M+Julzkt4j6bAesr9D0s/d9eEO0/7v/5X0jh6/PUzS70v6rMsrS77dmtwWjr7Mr3byxXMJJoES5d+cehBl488R3q3sA69/KunLsodqH6eMTWhl1xt7o70k+G3WSZLhZx+VUyafRirdJbIHcp8v6UtOljSh7OMyiHguwSRRsmHtRa7gy96n3ytNloI+L3so3V9KeqPcCY0p+ablDt8LZD1Y0s1B+v1Ojw8P775Z0sH+vpUc87poaFfSvpJOkfQXkm5TclJ9iG+9yji9PiR9LkFcYzEOlCjUxqDgR63ZQrcmzU5J35N0haTTZX3ytEyhwu/pECo5R+wtkn6cUpQ8+GuflvSWIK8wj34GscLJ/HFJ97h7ycqjDHcpnkswbrR4n/5hH1wRP/7wDDn2KJ0y/F0tPHd3U5DHMIdn+9/MS/pQVh7BZ/4A7MyjX7Ww//Boj3IZxSDCLdnPCZ9ZZESU+PzD7NMf+vFZSviMpH+V9aXXZz009VH4HnLuL+uXS4NdnkGEv/+S7Ez3QF9bgUFkfBf2H76s8voPoRH8rs8r/5OOLEKJUm0o8EAG+fG3yfrKb9QAPz6njKHLc5Kkx11eZfZPfFpPyIZ4FzoSVf3dpWUqr/8QVjgbwmcYKYgS5T9Z0g4t7CCmCz2PH/925fTjC8gYujznKxkVGcchej7NXZI2ZsmQU+ZB/YeDZPsPV8j2H37VQ5ZeLbGvpHbInrEQjaAoSpR/vZIaySt/Hj/+s7I+b2E/fggZl0m6NpCt7FGWkLAFvE6uBdMICqZ8/Yd3S/qM8vcffBlslz1robChdhYl7sQaSVtdQe5Sb7cmz3j8yAofpBVOxB0n6X4nx6QO0AtHXe6XdHxwj2Xd3yj9B185+dZwq+z6jGgEg1Ci/CuV+NJppQr9+FNUgh9fQL6p4O9zJb3oZKri3GCf54uSzs2Ssax71uD5h4tln8nzKRn9s3tc0kr3m2gEWSgZ4z5A0pagEHfK+qJXaAx+fAH5fK2/t6SrA/nG6fIMIsz7atndnsfmc6v4/EPYf/ihklGsGDIREhTsqyXdK+lHkj6tHnE1KsmPLyCbV/61ku52D7Qux6aGw493SzrKyTr22Bzln3/4B0lPyT7bV2uMFVUjUVL7nyA76pNVu0xE4VN5hjO8ZynpkFfh8gzCy/S8pLN9uWqCe/+rf/9hSvbZnuCvnZRcjURj8uML5O9r/WnZJt0zzKzupAhl+7iSe6hkGFJ93KVIBq7AKt+iO1CcVZK+HihXHVyeQYQu0Z2SVof3VGGZeje3sYuwWk/4gGQ73NucItXR5RmEl/lZSW9P318ksgAtnNUdFLvfFBasMci6164TOyJY98DtJncwdgfp00gWtDe9jPwC/SnsQvz3GmOe8fdcrWjV0/SHOxKyfQ3jtlV5C/BZ4BDqsbNE2fh7+glwjjHmVrldNbq8lrez/qDsTnJyyr8Ju4nuISR75LeNGey9HQJ8VdImY8y8MUZddok62QIELs/+wDXAb7PQVWgzoWv3ZeB9xpifd9Ul6pQBaOF2KicC/wgcTjtdnkH4e34C+ENjzF3q4PYmba/t9hC4PHOSzsfuw9NV5Ydkk6vDgdslbTTGzHXNJepECxC4PMuAvwXeTXdcnkGELtEXgPcbY17oikvUagNQcjD2rOzCjM9jd1iLB+UtJDwg7wHgD4wx93bBJWpt7Se7c7Gc8r8X+CaJ8s8QlT/EkLhExwDfkHRu4BK1Vk9aqQSBy7M3cCXwPvdVPCppMGEZ/T1wgTHmV211iVplACmXZy12lOcE4vGoRQmPS70HeI8x5mHZgLq5NrlErakNfTPtlP8s4Fskh2VEf78Y/kyDWeDXgG9JOsu3AG1yiVpxI655ngemJX0cuB7Yj/bO6k4KP3u8H3C9pCuwLey8WrLVSeNrxcDfXwV8DruXfnR5yiV0ib6BHSV6sg39gsYqSODyzMvGu18DvILuTmxNAl+2zwF/ZIy5MXwOlUo2JI10gdys7rxT/kuAr2CVP7o848W7RAcCX5F0SfAcGjl73LgWoOWx+02hNWsMGqMwHYvdbwqNX2PQCBeog7H7TSG9xuBDTVtjUPsWoEfsvu9wNcKAO0D4PBq1xqC2BjAgdj9ObNUT7xJtwQ6V1n6NQS1r0Byx+1H564kPqDuMhqwxqJ0iBS7PvsDfEWP3m0hj1hjUxgBSLk+M3W8+jVhjUIsaNYjdn5Pd6z7G7jefRqwxqFyx+sTuz2Fr/jbja8HKn8OYqe0ag8oKvoOx+z6gzCv9FIlSzJMMJRraff+1WmNQSSGHs4Uudv8qbMhtG2Z1lXpB7z7MC+590TFPJD40JB3KNoR7+Gf8C+CPjTE3hLP8kxZm4oUZuDwzwGbgT9xXTXR50sruF5Jk8XPs+Pj9wPeBHwCPuu+OBNYBx7r3w4EDeqQzF+TVVKMIn/UVwJ95nZi0SzTRgmt47L5X8nDWM6sjJ+CnwGNYJb8PeBDYYozZnisj6WXAamzn8VjgdcAabMhBVjmFLpQvyyaUZ+VrDCZSSA2M3e/nr4fsBH4MPIyt1b8PPAT8yBizY1GithxmXFrzxphd7vO9/GfAbJYrIOklwKuBtcB6rGG81n22tMc9hC5UXSuZStcYjL1A3KzunPv7EuAi91UdXJ4sF6aXovwSeBJbm9+Hrd0fAX6SVWO5hxj6/vPp69yYuMn43BuJl3Guh1FMA4diXahj3etoYBXZ/QqopwsV6sJHjTEXw0LdGRfjPkWwV+w+TH4Ooqi//gQL/fXHjTE/y0zYKXLwkcF28rMUfg3wm1j370T31beAO4FvA4+mH7ozCEPSIuHSz1QO2aNkj8D2J9ZjXanDsQtZsqiDUVSyxmBcZ+qGs7pVxO6PzV8PlD00JK/wacWdxtbOvwG80b2v6SELTt7HgO/Q3yByyxD8Zjk2RifsVxwJrKRe/YqsNQZjmz0u/YZSLs8m4GMun3G5PHn99V1k++tP9fDXwxZC5HgAKYU/BVvTZym8r3HDeYCsFimXQfSQPXTlMsfZg37FUSQu1FrgVVTbr/C6IuDPjTGXOnlLd4lKFX7MsfvD+uvehXkEeLqPvx4q48AVTYGSHUni0vSq4UOF71eThi3XIIP4BtZ1epR8xunz3XOfPfoVM9jW+rXYVmI91kBWA/v2SH4cLtRE1hiUYgApl+ck7BDnKFuPF/HXnyMZX7/Pvefx1/ekX7Rp9TWRpFOBrzG8wg/Miv4GIeDNxpg7hqkdA6PI40JV1a8Y6xqDkf3xoOB97P7fAEvIr/y9/PV0YXl//VFsjf59bJThFmPM871kY7Gyl9GEetlWO1l3YpXTy12Wq5eutcOymsO6Kaux6yUKK5dToAVK1MsoXIXyM2zL469dTjJfsZ5kvmIl2WUwTL8ivcbgg8aYT7r8R3aJRjKAPrH78z3S7uWvhw8ZkvH1R7CKfh/Wdy/kr497CA042OU3zWQ691kGcXCpGWQYBfTsVzwP3Oten3fXZfUrwvmKdGuZJw5qhkSnrpT065S0xmCoh5YKZDseG8gWxu77SZ2seJh0zVCWv15FVOGhVDuGbpwM48/IlnF6NCqrX7EDW1k9DPyLuy6rX+HnK/ZlsVGEFWWYh3/OvwccK8mvMRg6oK6wAbjY/XnA77v/SeClJG6An97O6vSG8TD3kfjrW3vkleXChDVGVfiCXuneqzACn6eXYeLRlEFrsed59HChZoGn3Ovm4Frfr/BG4fsVB9DbhQKra8cAd0q6wBjzaZee183891Dk4qDzN4ON3X9/r0sZfXy9tnvLSDIukvV7wPFUc+6Az/NeY8zrvUwTliEXBTvbReOgwLrfHzDG7C7aL8htAMFDfz129+Uj3Fe/Ap4mfzxM4fH1OhGUw1LgcawL4pvqiYri8nwaOMIYs7PORpDFEPMVPg7qdSTzFXu7y54AzjLGfK9IOeR6aM7vNsBbgQ8Bz2JHAx5icDxMofH1uuObWUmvxBrAS6nWAF7EGsDWYVyAulFgviKMgzoaOBkbYHkZcBOJu9yXIi3ANLYZ+klWE9MkF2YUAgNYh3Xv6sDrjDH3t8EAssjrQjkdXAn8NK8blLsT7BL8UZDROMbXm4CvNF7p3qs8d8zn/UrsgEKVI1Jjo8h8BXb4PDeFRoG8b9UhZc8iPfpSBwOocjSqEvrNVxTxPAo9uDa6NCOwcvAlE6NOslRKUR2txd4sDWUiE1A5qZMsjSIaQHHqMAnmqXwyrOlEAyiOH2XxneA6GEDYIY8UIBpAAVKTYL3CgKvgQElLnWyd6QiXQTSA4Xi5e0E9WoBQnkgBogEUwyvcAdgZ4PCzKvB5v5RkI63YAhQgGkAx6uhz16lP0jiiARTDK5dfhFInA/AyRQMoQDSA4TikagEyqKNMtScawHDUceKpjjLVnmgAxfATTXVyN+Jk2AhEAyhGHf3tOnbMG0M0gJzUeBLMEyfDhiAaQHHqMgnm8TLsT5wMK0w0gPx4RTuQekyCebwMLyFpmeogVyOIBpAfr1Qr3HudfG0vi5ctGkBOogHkp46TYJ46ds4bQTSA4tR5wqnOstWSaADFqfOEU51lqyXRAPJTp5VgaeJk2JBEA8hPnaMu42TYkEQDyEEDJsE8cTKsIHU8o7fOLMcePzpLalfkivGyLMPKuK1SaRpENIB8TGH3xj8E2K9iWfqxH1bGbSQyR/oQDSAfvlO5HbiUajbDHYSXaXvwfyQSifTm/wFBhiVw104kHQAAAABJRU5ErkJggg=='
 
 TEXT = {
     "en": {
@@ -680,8 +683,41 @@ class InstallerGUI(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
+        sidebar_panel = QWidget()
+        sidebar_panel.setFixedWidth(280)
+        sidebar_panel.setStyleSheet("background:#162033;")
+        sidebar_layout = QVBoxLayout()
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
+
+        logo_header = QWidget()
+        logo_header.setFixedHeight(145)
+        logo_header.setStyleSheet("background:#162033;")
+        logo_layout = QVBoxLayout(logo_header)
+        logo_layout.setContentsMargins(0, 12, 0, 12)
+        logo_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.sidebar_logo = QLabel(logo_header)
+        self.sidebar_logo.setFixedSize(112, 112)
+        self.sidebar_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.sidebar_logo.setStyleSheet("background:transparent; border:none; padding:0;")
+        try:
+            logo_data = base64.b64decode(ARVOR_LOGO_PNG_B64)
+            logo_pixmap = QPixmap()
+            logo_pixmap.loadFromData(logo_data, "PNG")
+            if not logo_pixmap.isNull():
+                self.sidebar_logo.setPixmap(
+                    logo_pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                )
+        except Exception:
+            self.sidebar_logo.setText("")
+
+        logo_layout.addWidget(self.sidebar_logo, 0, Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(logo_header, 0)
+
         self.sidebar = QListWidget()
-        self.sidebar.setFixedWidth(280)
+        self.sidebar.setStyleSheet("QListWidget{background:#162033;border:none;padding:0;} QListWidget::item{padding:15px 22px;color:#8e9db4;border-left:3px solid transparent;} QListWidget::item:hover{background:#202c42;color:#eef4ff;} QListWidget::item:selected{background:#27344d;color:#fff;border-left:3px solid #4a78ff;}")
         self.sidebar.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.sidebar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
 
@@ -689,7 +725,9 @@ class InstallerGUI(QMainWindow):
             item = QListWidgetItem(self.get_sidebar_icon(self.step_keys[i]), self.t(s))
             self.sidebar.addItem(item)
 
-        main_layout.addWidget(self.sidebar)
+        sidebar_layout.addWidget(self.sidebar, 1)
+        sidebar_panel.setLayout(sidebar_layout)
+        main_layout.addWidget(sidebar_panel)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout()
@@ -944,7 +982,7 @@ class InstallerGUI(QMainWindow):
         card, cl = self._create_card()
 
         self.lbl_de = self._create_label("de")
-        self.c_de = QComboBox()
+        self.c_de = self._make_combo()
         for d in self.desktops: self.c_de.addItem(d[0], d[1])
 
         cl.addWidget(self.lbl_de)
@@ -954,17 +992,40 @@ class InstallerGUI(QMainWindow):
         w.setLayout(l)
         return w
 
-    def _add_password_toggle(self, line_edit):
-        action = line_edit.addAction(self.get_nav_icon("eye") if "eye" in self.icon_cache else QIcon(), QLineEdit.ActionPosition.TrailingPosition)
-        action.setText("👁")
+    def _make_password_field(self, enabled=True):
+        """Returns (wrapper_widget, line_edit) with a visible Mostrar/Ocultar button."""
+        wrapper = QFrame()
+        wrapper.setStyleSheet(
+            "QFrame{background:#fff;border:1px solid #d9e1eb;border-radius:12px;}"
+            "QFrame:focus-within{border:1px solid #4a78ff;background:#fbfcff;}"
+        )
+        h = QHBoxLayout()
+        h.setContentsMargins(12, 0, 8, 0)
+        h.setSpacing(0)
+        field = QLineEdit()
+        field.setEchoMode(QLineEdit.EchoMode.Password)
+        field.setEnabled(enabled)
+        field.setStyleSheet("border:none;background:transparent;padding:12px 0;color:#243042;")
+        btn = QPushButton("Mostrar")
+        btn.setFixedWidth(65)
+        btn.setStyleSheet(
+            "QPushButton{border:none;background:transparent;color:#4a78ff;"
+            "font-size:12px;font-weight:600;padding:8px 0;}"
+            "QPushButton:hover{color:#3868ef;}"
+        )
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         def toggle():
-            if line_edit.echoMode() == QLineEdit.EchoMode.Password:
-                line_edit.setEchoMode(QLineEdit.EchoMode.Normal)
-                action.setText("🙈")
+            if field.echoMode() == QLineEdit.EchoMode.Password:
+                field.setEchoMode(QLineEdit.EchoMode.Normal)
+                btn.setText("Ocultar")
             else:
-                line_edit.setEchoMode(QLineEdit.EchoMode.Password)
-                action.setText("👁")
-        action.triggered.connect(toggle)
+                field.setEchoMode(QLineEdit.EchoMode.Password)
+                btn.setText("Mostrar")
+        btn.clicked.connect(toggle)
+        h.addWidget(field)
+        h.addWidget(btn)
+        wrapper.setLayout(h)
+        return wrapper, field
 
     def create_partitions_page(self):
         w = QWidget()
@@ -1030,17 +1091,32 @@ class InstallerGUI(QMainWindow):
         cl.addSpacing(15)
 
         self.chk_luks = QCheckBox(self.t("luks"))
-        self.chk_luks.setStyleSheet("font-weight: 600; color: #334155; margin-bottom: 5px;")
+        self.chk_luks.setStyleSheet(
+            "QCheckBox{font-weight:600;color:#334155;margin-bottom:5px;}"
+            "QCheckBox::indicator{width:18px;height:18px;border:2px solid #d9e1eb;border-radius:5px;background:#fff;}"
+            "QCheckBox::indicator:hover{border-color:#4a78ff;}"
+            "QCheckBox::indicator:checked{background:#4a78ff;border-color:#4a78ff;}"
+        )
+        self.chk_luks.setCursor(Qt.CursorShape.PointingHandCursor)
+        lbl_luks_hint = QLabel(self.t("luks_hint") if "luks_hint" in (self.lang_map or {}) else "Clique na caixa para ativar a encriptação do disco")
+        lbl_luks_hint.setStyleSheet("color:#94a3b8;font-size:12px;margin-bottom:8px;")
         self.lbl_luks_p = self._create_label("luks_p", "font-weight: 600; color: #64748b; margin-top: 10px; margin-bottom: 5px;")
-        self.i_luks_p = QLineEdit()
-        self.i_luks_p.setEchoMode(QLineEdit.EchoMode.Password)
-        self.i_luks_p.setEnabled(False)
-        self._add_password_toggle(self.i_luks_p)
-        self.chk_luks.toggled.connect(self.i_luks_p.setEnabled)
+        self.luks_p_wrapper, self.i_luks_p = self._make_password_field(enabled=False)
+        self.i_luks_p.setPlaceholderText("Senha de encriptação do disco")
+        def on_luks_toggle(checked):
+            self.luks_p_wrapper.setEnabled(checked)
+            self.i_luks_p.setEnabled(checked)
+            self.luks_p_wrapper.setStyleSheet(
+                "QFrame{background:#fff;border:1px solid #d9e1eb;border-radius:12px;}"
+                "QFrame:focus-within{border:1px solid #4a78ff;background:#fbfcff;}" if checked
+                else "QFrame{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;}"
+            )
+        self.chk_luks.toggled.connect(on_luks_toggle)
 
         cl.addWidget(self.chk_luks)
+        cl.addWidget(lbl_luks_hint)
         cl.addWidget(self.lbl_luks_p)
-        cl.addWidget(self.i_luks_p)
+        cl.addWidget(self.luks_p_wrapper)
 
         l.addWidget(card)
         l.addStretch()
@@ -1071,9 +1147,8 @@ class InstallerGUI(QMainWindow):
         self.i_host = QLineEdit(self.conf["hostname"])
 
         self.lbl_pass = self._create_label("pass")
-        self.i_pass = QLineEdit()
-        self.i_pass.setEchoMode(QLineEdit.EchoMode.Password)
-        self._add_password_toggle(self.i_pass)
+        self.pass_wrapper, self.i_pass = self._make_password_field()
+        self.i_pass.setPlaceholderText("Senha do utilizador")
 
         # Password Strength Bar
         self.pass_strength_bar = QProgressBar()
@@ -1085,9 +1160,8 @@ class InstallerGUI(QMainWindow):
         self.lbl_strength.setStyleSheet("font-size: 12px; color: #64748b;")
 
         self.lbl_pass_c = self._create_label("pass_c")
-        self.i_pass_c = QLineEdit()
-        self.i_pass_c.setEchoMode(QLineEdit.EchoMode.Password)
-        self._add_password_toggle(self.i_pass_c)
+        self.pass_c_wrapper, self.i_pass_c = self._make_password_field()
+        self.i_pass_c.setPlaceholderText("Confirmar senha")
 
         cl.addWidget(self.lbl_user)
         cl.addWidget(self.i_user)
@@ -1095,11 +1169,11 @@ class InstallerGUI(QMainWindow):
         cl.addWidget(self.lbl_host)
         cl.addWidget(self.i_host)
         cl.addWidget(self.lbl_pass)
-        cl.addWidget(self.i_pass)
+        cl.addWidget(self.pass_wrapper)
         cl.addWidget(self.pass_strength_bar)
         cl.addWidget(self.lbl_strength)
         cl.addWidget(self.lbl_pass_c)
-        cl.addWidget(self.i_pass_c)
+        cl.addWidget(self.pass_c_wrapper)
 
         self.i_user.textChanged.connect(self.validate_user_fields)
         self.i_host.textChanged.connect(self.validate_user_fields)
