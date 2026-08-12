@@ -14,9 +14,16 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QComboBox,
                              QLineEdit, QCheckBox, QStackedWidget, QMessageBox,
                              QTextEdit, QListWidget, QListWidgetItem, QFrame,
-                             QGraphicsDropShadowEffect, QProgressBar)
+                             QGraphicsDropShadowEffect, QProgressBar, QListView)
 from PyQt6.QtGui import QIcon, QPixmap, QColor
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
+
+class _ComboFixer:
+    """Monkey-patches the popup container to remove the native dark frame."""
+    def fix(self, combo):
+        combo.view().window().setWindowFlags(
+            Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
+        )
 
 SIMULATE = "--simulate" in sys.argv
 
@@ -51,6 +58,12 @@ QPushButton[primary="true"]:hover{background:#3868ef;}
 QLineEdit,QComboBox{background:#fff;border:1px solid #d9e1eb;border-radius:12px;padding:12px;color:#243042;selection-background-color:#4a78ff;}
 QLineEdit:focus,QComboBox:focus{border:1px solid #4a78ff;background:#fbfcff;}
 QComboBox::drop-down{border:none;width:24px;}
+QComboBox QAbstractItemView{background-color:#ffffff;border:1px solid #d9e1eb;border-radius:10px;padding:6px;color:#243042;selection-background-color:#4a78ff;selection-color:#ffffff;outline:none;}
+QComboBox QAbstractItemView::item{min-height:36px;padding:6px 12px;border-radius:6px;color:#243042;}
+QComboBox QAbstractItemView::item:hover{background-color:#f0f5ff;color:#4a78ff;}
+QComboBox QAbstractItemView::item:selected{background-color:#4a78ff;color:#ffffff;}
+QComboBoxPrivateContainer{background:#ffffff;border:1px solid #d9e1eb;border-radius:10px;padding:0;}
+QComboBoxPrivateScroller{background:#ffffff;}
 
 QFrame[card="true"]{background:#fff;border:1px solid #e5ebf3;border-radius:18px;}
 
@@ -77,7 +90,10 @@ TEXT = {
         "err_user": "Username and Hostname are required.", "summary_title": "Installation Summary", "summary_warn": "Warning: All data on the selected drive will be permanently erased.",
         "finish_msg": "Installation Complete", "finish_sub": "Arvor Linux has been successfully installed. Remove the media and reboot.",
         "warn_vm": "Virtual Machine Detected", "warn_power": "Running on Battery", "net_err": "No Internet Connection detected. Installation requires an active connection.",
-        "lbl_key_test": "Keyboard Test", "test_keymap": "Type here to test your keyboard layout..."
+        "lbl_key_test": "Keyboard Test", "test_keymap": "Type here to test your keyboard layout...",
+        "lbl_disk_layout": "Partition Layout Preview", "lbl_pass_strength": "Password Strength",
+        "weak": "Weak", "medium": "Medium", "strong": "Strong",
+        "err_user_format": "Username must start with a lowercase letter (a-z) and contain only a-z, 0-9, _ or -"
     },
     "pt": {
         "title": "Instalador Arvor Linux", "step_welcome": "Bem-vindo", "step_location": "Localização", "step_keyboard": "Teclado",
@@ -90,7 +106,10 @@ TEXT = {
         "err_user": "Nome de usuário e hostname são obrigatórios.", "summary_title": "Resumo da Instalacão", "summary_warn": "Aviso: Todos os dados no disco selecionado serão apagados.",
         "finish_msg": "Instalação Concluída", "finish_sub": "O Arvor Linux foi instalado com sucesso. Remova a mídia e reinicie.",
         "warn_vm": "Máquina Virtual Detectada", "warn_power": "Rodando na Bateria", "net_err": "Sem conexão com a Internet. A instalação requer rede ativa.",
-        "lbl_key_test": "Teste do Teclado", "test_keymap": "Digite aqui para testar o layout do teclado..."
+        "lbl_key_test": "Teste do Teclado", "test_keymap": "Digite aqui para testar o layout do teclado...",
+        "lbl_disk_layout": "Pré-visualização do Layout do Disco", "lbl_pass_strength": "Força da Senha",
+        "weak": "Fraca", "medium": "Média", "strong": "Forte",
+        "err_user_format": "Nome de usuário deve começar com letra minúscula (a-z) e conter apenas a-z, 0-9, _ ou -"
     },
     "es": {
         "title": "Instalador Arvor Linux", "step_welcome": "Bienvenido", "step_location": "Ubicación", "step_keyboard": "Teclado",
@@ -103,7 +122,10 @@ TEXT = {
         "err_user": "Nombre de usuario y hostname son obligatorios.", "summary_title": "Resumen de Instalación", "summary_warn": "Aviso: Todos los datos en el disco seleccionado serán eliminados.",
         "finish_msg": "Instalación Completada", "finish_sub": "Arvor Linux se instaló correctamente. Retire el medio y reinicie.",
         "warn_vm": "Máquina Virtual Detectada", "warn_power": "Ejecutando con Batería", "net_err": "No se detectó conexión a Internet.",
-        "lbl_key_test": "Prueba de Teclado", "test_keymap": "Escriba aquí para probar la distribución de teclado..."
+        "lbl_key_test": "Prueba de Teclado", "test_keymap": "Escriba aquí para probar la distribución de teclado...",
+        "lbl_disk_layout": "Vista previa de particiones", "lbl_pass_strength": "Fortaleza de la contraseña",
+        "weak": "Débil", "medium": "Media", "strong": "Fuerte",
+        "err_user_format": "El usuario debe empezar con minúscula (a-z) y contener solo a-z, 0-9, _ o -"
     },
     "fr": {
         "title": "Programme d'installation Arvor Linux", "step_welcome": "Bienvenue", "step_location": "Emplacement", "step_keyboard": "Clavier",
@@ -116,7 +138,10 @@ TEXT = {
         "err_user": "Nom d'utilisateur et hostname requis.", "summary_title": "Résumé de l'installation", "summary_warn": "Avertissement : Toutes les données sur le disque seront effacées.",
         "finish_msg": "Installation Terminée", "finish_sub": "Arvor Linux a été installé. Retirez le support et redémarrez.",
         "warn_vm": "Machine Virtuelle Détectée", "warn_power": "Fonctionnement sur Batterie", "net_err": "Pas de connexion Internet.",
-        "lbl_key_test": "Test du Clavier", "test_keymap": "Tapez ici pour tester la disposition de votre clavier..."
+        "lbl_key_test": "Test du Clavier", "test_keymap": "Tapez ici pour tester la disposition de votre clavier...",
+        "lbl_disk_layout": "Aperçu de la disposition des partitions", "lbl_pass_strength": "Force du mot de passe",
+        "weak": "Faible", "medium": "Moyen", "strong": "Fort",
+        "err_user_format": "Le nom d'utilisateur doit commencer par une lettre minuscule (a-z)"
     },
     "de": {
         "title": "Arvor Linux Installationsprogramm", "step_welcome": "Willkommen", "step_location": "Standort", "step_keyboard": "Tastatur",
@@ -129,7 +154,10 @@ TEXT = {
         "err_user": "Benutzername und Hostname sind erforderlich.", "summary_title": "Zusammenfassung", "summary_warn": "Warnung: Alle Daten auf der ausgewählten Festplatte werden gelöscht.",
         "finish_msg": "Installation Abgeschlossen", "finish_sub": "Arvor Linux wurde erfolgreich installiert. Entfernen Sie das Medium und starten Sie neu.",
         "warn_vm": "Virtuelle Maschine Erkannt", "warn_power": "Akkubetrieb Erkannt", "net_err": "Keine Internetverbindung erkannt.",
-        "lbl_key_test": "Tastaturtest", "test_keymap": "Hier tippen, um das Tastaturlayout zu testen..."
+        "lbl_key_test": "Tastaturtest", "test_keymap": "Hier tippen, um das Tastaturlayout zu testen...",
+        "lbl_disk_layout": "Vorschau der Partitionierung", "lbl_pass_strength": "Passwortstärke",
+        "weak": "Schwach", "medium": "Mittel", "strong": "Stark",
+        "err_user_format": "Benutzername muss mit Kleinbuchstaben (a-z) beginnen"
     },
     "gl": {
         "title": "Instalador Arvor Linux", "step_welcome": "Benvido", "step_location": "Localización", "step_keyboard": "Teclado",
@@ -140,9 +168,12 @@ TEXT = {
         "luks": "Activar Cifrado de Disco (LUKS)", "luks_p": "Contrasinal de Cifrado", "host": "Nome do Computador", "user_name": "Nome de usuario (sen espazos)",
         "pass": "Contrasinal", "pass_c": "Confirmar Contrasinal", "err_pass": "Os contrasinais non coinciden.", "err_disk": "Seleccione unha unidade.",
         "err_user": "Nome de usuario e hostname son obrigatorios.", "summary_title": "Resumo da Instalación", "summary_warn": "Aviso: Todos os datos na unidade seleccionada serán eliminados.",
-        "finish_msg": "Instalación Completada", "finish_sub": "Arvor Linux instalouse correctamente. Retire o medio e reinicie.",
+        "finish_msg": "Instalaación Completada", "finish_sub": "Arvor Linux instalouse correctamente. Retire o medio e reinicie.",
         "warn_vm": "Máquina Virtual Detectada", "warn_power": "Executando con Batería", "net_err": "Non se detectou conexión a Internet.",
-        "lbl_key_test": "Praba do Teclado", "test_keymap": "Escriba aquí para probar a súa distribución de teclado..."
+        "lbl_key_test": "Praba do Teclado", "test_keymap": "Escriba aquí para probar a súa distribución de teclado...",
+        "lbl_disk_layout": "Vista previa de particións", "lbl_pass_strength": "Fortaleza do contrasinal",
+        "weak": "Débil", "medium": "Media", "strong": "Forte",
+        "err_user_format": "O usuario debe comezar con minúscula (a-z) e conter só a-z, 0-9, _ ou -"
     }
 }
 
@@ -750,6 +781,25 @@ class InstallerGUI(QMainWindow):
         lbl.setStyleSheet(style)
         return lbl
 
+    def _make_combo(self):
+        cb = QComboBox()
+        cb.setMaxVisibleItems(12)
+        view = QListView()
+        view.setSpacing(2)
+        view.setStyleSheet("background:#ffffff; border:none; outline:none; padding:4px;")
+        cb.setView(view)
+        cb.setStyleSheet("QComboBox QAbstractItemView { border: none; }")
+
+        original_show = cb.showPopup
+        def patched_show():
+            original_show()
+            popup = cb.view().window()
+            popup.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+            popup.setStyleSheet("background:#ffffff; border:1px solid #d9e1eb; border-radius:10px;")
+            popup.show()
+        cb.showPopup = patched_show
+        return cb
+
     def _create_alert(self, msg_key, alert_type):
         f = QFrame()
         f.setProperty("alert", alert_type)
@@ -775,7 +825,7 @@ class InstallerGUI(QMainWindow):
 
         card, cl = self._create_card()
         lbl_lang = self._create_label("locale")
-        self.c_lang = QComboBox()
+        self.c_lang = self._make_combo()
         self.c_lang.addItems(["English", "Português (Brasil)", "Español", "Français", "Deutsch", "Galego"])
         self.c_lang.currentIndexChanged.connect(self.change_language)
 
@@ -837,12 +887,12 @@ class InstallerGUI(QMainWindow):
         card, cl = self._create_card()
 
         self.lbl_loc = self._create_label("locale")
-        self.c_locale = QComboBox()
+        self.c_locale = self._make_combo()
         self.c_locale.addItems(self.list_of_locales)
         self.c_locale.setCurrentText(self.sys_locale)
 
         self.lbl_tz = self._create_label("tz")
-        self.i_tz = QComboBox()
+        self.i_tz = self._make_combo()
         self.i_tz.addItems(self.list_of_timezones)
         self.i_tz.setCurrentText(self.conf["timezone"])
 
@@ -863,7 +913,7 @@ class InstallerGUI(QMainWindow):
         card, cl = self._create_card()
 
         self.lbl_key = self._create_label("keymap")
-        self.c_key = QComboBox()
+        self.c_key = self._make_combo()
         self.c_key.addItems(self.list_of_keymaps)
         self.c_key.setCurrentText(self.conf["keymap"])
         self.c_key.currentTextChanged.connect(self.on_keymap_changed)
@@ -904,6 +954,18 @@ class InstallerGUI(QMainWindow):
         w.setLayout(l)
         return w
 
+    def _add_password_toggle(self, line_edit):
+        action = line_edit.addAction(self.get_nav_icon("eye") if "eye" in self.icon_cache else QIcon(), QLineEdit.ActionPosition.TrailingPosition)
+        action.setText("👁")
+        def toggle():
+            if line_edit.echoMode() == QLineEdit.EchoMode.Password:
+                line_edit.setEchoMode(QLineEdit.EchoMode.Normal)
+                action.setText("🙈")
+            else:
+                line_edit.setEchoMode(QLineEdit.EchoMode.Password)
+                action.setText("👁")
+        action.triggered.connect(toggle)
+
     def create_partitions_page(self):
         w = QWidget()
         l = QVBoxLayout()
@@ -911,18 +973,61 @@ class InstallerGUI(QMainWindow):
         card, cl = self._create_card()
 
         self.lbl_disk = self._create_label("disk")
-        self.c_disk = QComboBox()
-        for d in Sys.list_disks(): self.c_disk.addItem(f"{d['model']} ({d['size']}) - {d['name']}", f"/dev/{d['name']}")
+        self.c_disk = self._make_combo()
+        self.disks_info = Sys.list_disks()
+        for d in self.disks_info:
+            self.c_disk.addItem(f"{d['model']} ({d['size']}) - {d['name']}", f"/dev/{d['name']}")
 
         cl.addWidget(self.lbl_disk)
         cl.addWidget(self.c_disk)
-        cl.addSpacing(20)
+        cl.addSpacing(15)
 
+        # Partition Layout Preview Bar
+        self.lbl_disk_preview = self._create_label("lbl_disk_layout")
+        cl.addWidget(self.lbl_disk_preview)
+
+        preview_frame = QFrame()
+        preview_frame.setStyleSheet("background: #f1f5f9; border-radius: 8px; padding: 4px;")
+        bar_layout = QHBoxLayout()
+        bar_layout.setContentsMargins(0, 0, 0, 0)
+        bar_layout.setSpacing(2)
+
+        seg_esp = QLabel("ESP (512M)")
+        seg_esp.setStyleSheet("background: #3b82f6; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        seg_esp.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        seg_boot = QLabel("BOOT (1G)")
+        seg_boot.setStyleSheet("background: #6366f1; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        seg_boot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.seg_thin = QLabel("Thin Pool (~78%)")
+        self.seg_thin.setStyleSheet("background: #10b981; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        self.seg_thin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.seg_free = QLabel("VG Free (~22%)")
+        self.seg_free.setStyleSheet("background: #f59e0b; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        self.seg_free.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        bar_layout.addWidget(seg_esp, 1)
+        bar_layout.addWidget(seg_boot, 2)
+        bar_layout.addWidget(self.seg_thin, 78)
+        bar_layout.addWidget(self.seg_free, 22)
+        preview_frame.setLayout(bar_layout)
+        cl.addWidget(preview_frame)
+
+        self.lbl_disk_legend = QLabel()
+        self.lbl_disk_legend.setStyleSheet("color: #64748b; font-size: 12px; margin-top: 5px;")
+        cl.addWidget(self.lbl_disk_legend)
+
+        self.c_disk.currentIndexChanged.connect(self.update_disk_preview)
+        self.update_disk_preview()
+
+        cl.addSpacing(15)
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background-color: #f1f5f9; height: 1px;")
+        line.setStyleSheet("background-color: #e2e8f0; height: 1px;")
         cl.addWidget(line)
-        cl.addSpacing(20)
+        cl.addSpacing(15)
 
         self.chk_luks = QCheckBox(self.t("luks"))
         self.chk_luks.setStyleSheet("font-weight: 600; color: #334155; margin-bottom: 5px;")
@@ -930,6 +1035,7 @@ class InstallerGUI(QMainWindow):
         self.i_luks_p = QLineEdit()
         self.i_luks_p.setEchoMode(QLineEdit.EchoMode.Password)
         self.i_luks_p.setEnabled(False)
+        self._add_password_toggle(self.i_luks_p)
         self.chk_luks.toggled.connect(self.i_luks_p.setEnabled)
 
         cl.addWidget(self.chk_luks)
@@ -941,6 +1047,13 @@ class InstallerGUI(QMainWindow):
         w.setLayout(l)
         return w
 
+    def update_disk_preview(self):
+        idx = self.c_disk.currentIndex()
+        if idx >= 0 and idx < len(self.disks_info):
+            d = self.disks_info[idx]
+            size_str = d.get('size', '')
+            self.lbl_disk_legend.setText(f"Drive: /dev/{d['name']} ({d['model']} - {size_str}) | Scheme: GPT | ESP: 512MiB | Boot: 1024MiB | Thin Pool: ~78% | VG Free: ~22%")
+
     def create_users_page(self):
         w = QWidget()
         l = QVBoxLayout()
@@ -949,22 +1062,85 @@ class InstallerGUI(QMainWindow):
 
         self.lbl_user = self._create_label("user_name")
         self.i_user = QLineEdit()
+        self.lbl_user_err = QLabel()
+        self.lbl_user_err.setStyleSheet("color: #ef4444; font-size: 12px; margin-bottom: 5px;")
+        self.lbl_user_err.setWordWrap(True)
+        self.lbl_user_err.hide()
+
         self.lbl_host = self._create_label("host")
         self.i_host = QLineEdit(self.conf["hostname"])
+
         self.lbl_pass = self._create_label("pass")
         self.i_pass = QLineEdit()
         self.i_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        self._add_password_toggle(self.i_pass)
+
+        # Password Strength Bar
+        self.pass_strength_bar = QProgressBar()
+        self.pass_strength_bar.setFixedHeight(6)
+        self.pass_strength_bar.setTextVisible(False)
+        self.pass_strength_bar.setValue(0)
+
+        self.lbl_strength = QLabel()
+        self.lbl_strength.setStyleSheet("font-size: 12px; color: #64748b;")
+
         self.lbl_pass_c = self._create_label("pass_c")
         self.i_pass_c = QLineEdit()
         self.i_pass_c.setEchoMode(QLineEdit.EchoMode.Password)
+        self._add_password_toggle(self.i_pass_c)
 
-        for widget in [self.lbl_user, self.i_user, self.lbl_host, self.i_host, self.lbl_pass, self.i_pass, self.lbl_pass_c, self.i_pass_c]:
-            cl.addWidget(widget)
+        cl.addWidget(self.lbl_user)
+        cl.addWidget(self.i_user)
+        cl.addWidget(self.lbl_user_err)
+        cl.addWidget(self.lbl_host)
+        cl.addWidget(self.i_host)
+        cl.addWidget(self.lbl_pass)
+        cl.addWidget(self.i_pass)
+        cl.addWidget(self.pass_strength_bar)
+        cl.addWidget(self.lbl_strength)
+        cl.addWidget(self.lbl_pass_c)
+        cl.addWidget(self.i_pass_c)
+
+        self.i_user.textChanged.connect(self.validate_user_fields)
+        self.i_host.textChanged.connect(self.validate_user_fields)
+        self.i_pass.textChanged.connect(self.update_password_strength)
 
         l.addWidget(card)
         l.addStretch()
         w.setLayout(l)
         return w
+
+    def validate_user_fields(self):
+        user = self.i_user.text().strip()
+        import re
+        if user and not re.match(r'^[a-z_][a-z0-9_-]*$', user):
+            self.lbl_user_err.setText(self.t("err_user_format"))
+            self.lbl_user_err.show()
+        else:
+            self.lbl_user_err.hide()
+
+    def update_password_strength(self, pwd):
+        if not pwd:
+            self.pass_strength_bar.setValue(0)
+            self.lbl_strength.setText("")
+            return
+        score = 0
+        if len(pwd) >= 6: score += 20
+        if len(pwd) >= 10: score += 20
+        if any(c.islower() for c in pwd): score += 20
+        if any(c.isupper() for c in pwd): score += 20
+        if any(c.isdigit() for c in pwd) or any(not c.isalnum() for c in pwd): score += 20
+
+        self.pass_strength_bar.setValue(score)
+        if score < 40:
+            self.pass_strength_bar.setStyleSheet("QProgressBar::chunk{background:#ef4444;border-radius:3px;}")
+            self.lbl_strength.setText(f"{self.t('lbl_pass_strength')}: <span style='color:#ef4444;font-weight:bold;'>{self.t('weak')}</span>")
+        elif score < 80:
+            self.pass_strength_bar.setStyleSheet("QProgressBar::chunk{background:#f59e0b;border-radius:3px;}")
+            self.lbl_strength.setText(f"{self.t('lbl_pass_strength')}: <span style='color:#f59e0b;font-weight:bold;'>{self.t('medium')}</span>")
+        else:
+            self.pass_strength_bar.setStyleSheet("QProgressBar::chunk{background:#10b981;border-radius:3px;}")
+            self.lbl_strength.setText(f"{self.t('lbl_pass_strength')}: <span style='color:#10b981;font-weight:bold;'>{self.t('strong')}</span>")
 
     def create_summary_page(self):
         w = QWidget()
@@ -1167,7 +1343,7 @@ if __name__ == "__main__":
         QMessageBox.critical(None, "Network Error", TEXT["en"]["net_err"])
         sys.exit(1)
 
-    if os.geteuid() != 0 and not SIMULATE:
+    if hasattr(os, "geteuid") and os.geteuid() != 0 and not SIMULATE:
         QMessageBox.critical(None, "Error", "Must run as root.")
         sys.exit(1)
 
