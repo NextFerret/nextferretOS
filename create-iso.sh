@@ -25,7 +25,7 @@ insmod ext2
 set default=0
 set timeout=5
 
-menuentry "Arvor Linux 5.1 (Branches) Desktop" {
+menuentry "Arvor Linux 7.1 (Sable) Beta 12826 Desktop" {
     search --no-floppy --set=root --file /live/vmlinuz
     linux /live/vmlinuz boot=live components quiet splash
     initrd /live/initrd.img
