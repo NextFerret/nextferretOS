@@ -10,7 +10,7 @@ rsync -aAXv / /tmp/rootfs_staging/ \
 mkdir -p /tmp/rootfs_staging/{dev,proc,sys,tmp,run,mnt,media}
 chmod 1777 /tmp/rootfs_staging/tmp
 
-mksquashfs /tmp/rootfs_staging /tmp/iso_build/live/filesystem.squashfs -comp xz -noappend
+mksquashfs /tmp/rootfs_staging /tmp/iso_build/live/filesystem.squashfs -comp xz -noappend -processors 8
 
 KERNEL_VERSION="6.12.86+deb13-amd64"
 
@@ -37,4 +37,7 @@ menuentry "UEFI Firmware Settings" {
 
 EOF
 
-grub-mkrescue -o /arvor-x64-51.iso /tmp/iso_build
+grub-mkrescue -o /arvorlinux-x86_64-sable.iso /tmp/iso_build
+
+
+sha256sum /arvorlinux-x86_64-sable.iso > /arvorlinux-x86_64-sable.iso.sha256
