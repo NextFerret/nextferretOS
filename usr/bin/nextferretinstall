@@ -35,7 +35,7 @@ FILES = [
     "/usr/bin/apt-nf-tree",
     "/etc/napt/sources.list",
     "/usr/bin/nlc",
-    "/usr/sbin/lvmabd_start"
+    "/usr/bin/nsmd_start"
 ]
 
 STYLES = """
