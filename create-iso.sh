@@ -1,11 +1,10 @@
 #!/bin/bash
-
 set -e
 
 mkdir -p /tmp/rootfs_staging /tmp/iso_build/live /tmp/iso_build/boot/grub
 
 rsync -aAXv / /tmp/rootfs_staging/ \
-  --exclude={/dev/*,/proc/*,/sys/*,/tmp/*,/run/*,/mnt/*,/media/*,/*.iso,/nextferret-plymouth-theme,/build_iso.sh}
+  --exclude={/dev/*,/proc/*,/sys/*,/tmp/*,/run/*,/mnt/*,/media/*,/*.iso,/nextferret-plymouth-theme,/build_iso.sh,/*sha256}
 
 mkdir -p /tmp/rootfs_staging/{dev,proc,sys,tmp,run,mnt,media}
 chmod 1777 /tmp/rootfs_staging/tmp
@@ -25,7 +24,7 @@ insmod ext2
 set default=0
 set timeout=5
 
-menuentry "Arvor Linux 7.1 (Sable) Beta 12826 Desktop" {
+menuentry "Arvor Linux 7.1 (Sable) Beta 14826 Desktop" {
     search --no-floppy --set=root --file /live/vmlinuz
     linux /live/vmlinuz boot=live components quiet splash
     initrd /live/initrd.img
