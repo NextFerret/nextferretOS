@@ -1,4 +1,5 @@
 #!/bin/bash
+
 set -e
 
 mkdir -p /tmp/rootfs_staging /tmp/iso_build/live /tmp/iso_build/boot/grub
@@ -9,7 +10,7 @@ rsync -aAXv / /tmp/rootfs_staging/ \
 mkdir -p /tmp/rootfs_staging/{dev,proc,sys,tmp,run,mnt,media}
 chmod 1777 /tmp/rootfs_staging/tmp
 
-mksquashfs /tmp/rootfs_staging /tmp/iso_build/live/filesystem.squashfs -comp xz -noappend -processors 8
+mksquashfs /tmp/rootfs_staging /tmp/iso_build/live/filesystem.squashfs -comp xz -noappend -processors 16
 
 KERNEL_VERSION="6.12.86+deb13-amd64"
 
@@ -24,7 +25,7 @@ insmod ext2
 set default=0
 set timeout=5
 
-menuentry "Arvor Linux 7.1 (Sable) Beta 14826 Desktop" {
+menuentry "Arvor Linux 7.1 (Sable) Desktop" {
     search --no-floppy --set=root --file /live/vmlinuz
     linux /live/vmlinuz boot=live components quiet splash
     initrd /live/initrd.img
