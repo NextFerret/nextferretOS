@@ -84,7 +84,7 @@
     "slide2_title": "Secure Packaging with NAPT",
     "slide2_desc": "NAPT executes package management with active Seccomp syscall filtering, blocking 22 dangerous system calls for rock-solid stability.",
     "slide3_title": "Isolated Environments with NLC",
-    "slide3_desc": "The NextFerret Linux Chroots manages isolated Chroots in /nsm/chroots, letting you run software without risking host system corruption.",
+    "slide3_desc": "NextFerret Linux Chroots manages isolated Chroots in /nsm/chroots, letting you run software without risking host system corruption.",
     "slide4_title": "Active RAM Compression with ZRAM",
     "slide4_desc": "The ultra-fast zstd algorithm dynamically expands effective RAM capacity with zero disk wear, extending SSD and NVMe lifespan.",
     "slide5_title": "Solid Debian GNU/Linux Base",
