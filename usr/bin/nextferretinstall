@@ -35,7 +35,6 @@ FILES = [
     "/usr/share/nextferret/credits",
     "/usr/bin/apt-nf-tree",
     "/etc/napt/sources.list",
-    "/usr/bin/nlc",
     "/usr/bin/nsmd_start",
     "/etc/nextferretinst/translations.json"
 ]
