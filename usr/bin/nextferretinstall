@@ -494,7 +494,11 @@ cat << EOF > /etc/fstab
 {f_efi}  /boot/efi       vfat    defaults        0       1
 EOF
 """
-
+        if self.conf["luks"]:
+            luks_sh = f'echo "{self.mapper} UUID={u_p3} none luks" > /etc/crypttab'
+        else:
+            luks_sh = ""
+            
         swap_mode = self.conf.get("swap_mode", "zram")
         swap_sh = ""
         if swap_mode == "zram":
