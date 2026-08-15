@@ -37,6 +37,63 @@
 #include <apt-pkg/upgrade.h>
 #include <apt-pkg/error.h>
 #include <apt-pkg/version.h>
+#include <apt-pkg/install-progress.h>
+#include <apt-pkg/debfile.h>
+#include <apt-pkg/fileutl.h>
+#include <apt-pkg/tagfile.h>
+#include <apt-pkg/update.h>
+#include <memory>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <linux/seccomp.h>
+#include <linux/filter.h>
+#include <linux/audit.h>
+#include <stddef.h>
+
+#ifndef PR_SET_NO_NEW_PRIVS
+#define PR_SET_NO_NEW_PRIVS 38
+#endif
+
+#ifndef PR_SET_SECCOMP
+#define PR_SET_SECCOMP 22
+#endif
+
+#ifndef SECCOMP_MODE_FILTER
+#define SECCOMP_MODE_FILTER 2
+#endif
+
+#ifndef SECCOMP_RET_ERRNO
+#define SECCOMP_RET_ERRNO 0x05000000U
+#endif
+
+#ifndef SECCOMP_RET_ALLOW
+#define SECCOMP_RET_ALLOW 0x7fff0000U
+#endif
+
+#ifndef SECCOMP_RET_DATA
+#define SECCOMP_RET_DATA 0x0000ffffU
+#endif
+
+#ifndef AUDIT_ARCH_X86_64
+#define AUDIT_ARCH_X86_64 0xc000003e
+#endif
+
+#ifndef AUDIT_ARCH_AARCH64
+#define AUDIT_ARCH_AARCH64 0xc00000b7
+#endif
+
+#if defined(__x86_64__)
+#define SECCOMP_TARGET_ARCH AUDIT_ARCH_X86_64
+#elif defined(__aarch64__)
+#define SECCOMP_TARGET_ARCH AUDIT_ARCH_AARCH64
+#elif defined(__i386__)
+#define SECCOMP_TARGET_ARCH 0x40000003
+#elif defined(__arm__)
+#define SECCOMP_TARGET_ARCH 0x40000028
+#else
+#define SECCOMP_TARGET_ARCH 0
+#endif
+
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -45,13 +102,123 @@ const string TREE_ROOT = "/nsm/napt/root";
 const string NF_TREE_BIN = "/usr/bin/nsm";
 const string AUTO_SNAP_DIR = "/nsm/snapshots/auto";
 const string NAPT_ETC_DIR = "/etc/napt";
-const string NAPT_SOURCES_PATH = "/etc/napt/sources.list";
+const string NAPT_SOURCES_FILE = "/etc/napt/sources.list";
+const string NAPT_SOURCES_DIR  = "/etc/napt/sources.list.d";
 const string NAPT_CACHE_DIR = "/etc/napt/cache";
 const string NAPT_ALLOWED_FILE = "/etc/napt/allowed";
 
-// Global CLI options and backup structures for security & automation
 static bool assume_yes = false;
+static bool g_enable_seccomp = true;
 static std::atomic<bool> sandbox_created_and_mounted(false);
+
+class ChrootSeccompManager {
+public:
+    static bool apply_filter(string& err_out) {
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+            err_out = "Failed to set PR_SET_NO_NEW_PRIVS: " + string(strerror(errno));
+            return false;
+        }
+
+        vector<sock_filter> filter;
+
+        filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t)offsetof(struct seccomp_data, arch)));
+
+#if SECCOMP_TARGET_ARCH != 0
+        filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SECCOMP_TARGET_ARCH, 1, 0));
+        filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
+#endif
+
+        filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t)offsetof(struct seccomp_data, nr)));
+
+        vector<int> blocked_syscalls;
+
+#ifdef __NR_reboot
+        blocked_syscalls.push_back(__NR_reboot);
+#endif
+#ifdef __NR_init_module
+        blocked_syscalls.push_back(__NR_init_module);
+#endif
+#ifdef __NR_delete_module
+        blocked_syscalls.push_back(__NR_delete_module);
+#endif
+#ifdef __NR_finit_module
+        blocked_syscalls.push_back(__NR_finit_module);
+#endif
+#ifdef __NR_kexec_load
+        blocked_syscalls.push_back(__NR_kexec_load);
+#endif
+#ifdef __NR_kexec_file_load
+        blocked_syscalls.push_back(__NR_kexec_file_load);
+#endif
+#ifdef __NR_swapon
+        blocked_syscalls.push_back(__NR_swapon);
+#endif
+#ifdef __NR_swapoff
+        blocked_syscalls.push_back(__NR_swapoff);
+#endif
+#ifdef __NR_acct
+        blocked_syscalls.push_back(__NR_acct);
+#endif
+#ifdef __NR_ptrace
+        blocked_syscalls.push_back(__NR_ptrace);
+#endif
+#ifdef __NR_bpf
+        blocked_syscalls.push_back(__NR_bpf);
+#endif
+#ifdef __NR_userfaultfd
+        blocked_syscalls.push_back(__NR_userfaultfd);
+#endif
+#ifdef __NR_syslog
+        blocked_syscalls.push_back(__NR_syslog);
+#endif
+#ifdef __NR_iopl
+        blocked_syscalls.push_back(__NR_iopl);
+#endif
+#ifdef __NR_ioperm
+        blocked_syscalls.push_back(__NR_ioperm);
+#endif
+#ifdef __NR_vmsplice
+        blocked_syscalls.push_back(__NR_vmsplice);
+#endif
+#ifdef __NR_add_key
+        blocked_syscalls.push_back(__NR_add_key);
+#endif
+#ifdef __NR_request_key
+        blocked_syscalls.push_back(__NR_request_key);
+#endif
+#ifdef __NR_keyctl
+        blocked_syscalls.push_back(__NR_keyctl);
+#endif
+#ifdef __NR_pivot_root
+        blocked_syscalls.push_back(__NR_pivot_root);
+#endif
+#ifdef __NR_clock_settime
+        blocked_syscalls.push_back(__NR_clock_settime);
+#endif
+#ifdef __NR_settimeofday
+        blocked_syscalls.push_back(__NR_settimeofday);
+#endif
+
+        for (int sys_nr : blocked_syscalls) {
+            filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)sys_nr, 0, 1));
+            filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
+        }
+
+        filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+
+        struct sock_fprog prog;
+        prog.len = (unsigned short)filter.size();
+        prog.filter = filter.data();
+
+        if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) != 0) {
+            err_out = "Failed to load SECCOMP filter: " + string(strerror(errno));
+            return false;
+        }
+
+        return true;
+    }
+};
+
 
 bool read_text_file(const string& path, string& content);
 bool write_text_file(const string& path, const string& content);
@@ -74,7 +241,7 @@ struct ConfigBackup {
         napt_sources_orig.clear();
         read_text_file("/etc/os-release", os_release_orig);
         read_text_file("/etc/apt/sources.list", apt_sources_orig);
-        read_text_file(NAPT_SOURCES_PATH, napt_sources_orig);
+        read_text_file("/etc/napt/sources.list", napt_sources_orig);
         backed_up = true;
     }
 
@@ -91,15 +258,15 @@ struct ConfigBackup {
         else unlink("/etc/os-release");
         if (!apt_sources_orig.empty()) write_text_file("/etc/apt/sources.list", apt_sources_orig);
         else unlink("/etc/apt/sources.list");
-        if (!napt_sources_orig.empty()) write_text_file(NAPT_SOURCES_PATH, napt_sources_orig);
-        else unlink(NAPT_SOURCES_PATH.c_str());
+        if (!napt_sources_orig.empty()) write_text_file("/etc/napt/sources.list", napt_sources_orig);
+        else unlink("/etc/napt/sources.list");
     }
 
     void apply_new() {
         if (!has_new) return;
         if (!os_release_new.empty()) write_text_file("/etc/os-release", os_release_new);
         if (!apt_sources_new.empty()) write_text_file("/etc/apt/sources.list", apt_sources_new);
-        if (!napt_sources_new.empty()) write_text_file(NAPT_SOURCES_PATH, napt_sources_new);
+        if (!napt_sources_new.empty()) write_text_file("/etc/napt/sources.list", napt_sources_new);
     }
 };
 
@@ -140,29 +307,35 @@ struct InstallDecision {
     bool from_napt = false;
 };
 
-void perform_install_transaction(const vector<string>& pkgs, bool apply_host);
+void perform_install_transaction(const vector<string>& pkgs, bool apply_host, bool is_upgrade = false);
+bool run_libapt_transaction(const string& action, const vector<string>& targets, int status_fd, bool quiet);
 
 bool nf_tree_available() {
     return access(NF_TREE_BIN.c_str(), X_OK) == 0;
 }
 
 void show_help() {
-    cout << "New Advanced Packaging Tool - napt 3.0 - arm64\n\n"
+    cout << "New Advanced Packaging Tool - napt 4.0\n\n"
          << "Usage: napt [command] [options]\n\n"
          << "Commands:\n"
-         << "  install          Installs packages or local .deb files in a chroot; applies to host only if successful.\n"
-         << "  remove           Removes packages in a chroot; applies to host only if successful.\n"
-         << "  sync             Updates repository metadata.\n"
-         << "  upgrade          Upgrades all packages, or selected packages, using the chroot-first method.\n"
-         << "  dist-upgrade     Full release upgrade\n"
-         << "  purge            Removes packages and their configuration files.\n"
-         << "  clean            Cleans the Napt download cache.\n"
-         << "  autoclean        Cleans obsolete packages from the Napt download cache.\n\n"
+         << "  install          Install packages or local .deb files. Tested in a chroot before being applied to the host.\n"
+         << "  remove           Remove packages. Tested in a chroot before being applied to the host.\n"
+         << "  purge            Remove packages along with their configuration files.\n"
+         << "  upgrade          Upgrade all packages, or the specified packages.\n"
+         << "  dist-upgrade     Perform a full release upgrade.\n"
+         << "  search           Search available packages by name. Use -p <page> to paginate.\n"
+         << "  sync             Refresh repository metadata.\n"
+         << "  clean            Clear the Napt package cache.\n"
+         << "  autoclean        Clear obsolete packages from the Napt download cache.\n\n"
          << "Options:\n"
-         << "  --apply-host     Skip the chroot and apply changes directly to the host.\n"
+         << "  --apply-host     Skip the chroot test and apply changes directly to the host.\n"
+         << "  --no-seccomp     Disable SECCOMP syscall filtering inside the chroot sandbox.\n"
+         << "  -p <page>        Show a specific page of search results (used with search).\n"
          << "  --v              Show version information.\n"
-         << "  --vb             Enable verbose logging for debugging libapt transactions.\n"
+         << "  --vb             Enable verbose logging for libapt transactions.\n"
          << "  -h               Show this help message.\n\n"
+         << "Napt repositories are configured in /etc/napt/sources.list (one per line)\n"
+         << "and/or as individual files under /etc/napt/sources.list.d/.\n\n"
          << "                 This napt Has Super Cow Powers.\n";
 }
 
@@ -199,18 +372,44 @@ static int exec_argv(const vector<string>& args, int stdout_fd = -1, int stderr_
     if (pid < 0) return 1;
 
     if (pid == 0) {
-        if (stdout_fd >= 0 && stdout_fd != STDOUT_FILENO) {
+        int devnull_r = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (devnull_r >= 0) { dup2(devnull_r, STDIN_FILENO); close(devnull_r); }
+
+        if (stdout_fd >= 0 && stdout_fd != STDOUT_FILENO)
             dup2(stdout_fd, STDOUT_FILENO);
-            close(stdout_fd);
-        }
-        if (stderr_fd >= 0 && stderr_fd != STDERR_FILENO) {
+        if (stderr_fd >= 0 && stderr_fd != STDERR_FILENO)
             dup2(stderr_fd, STDERR_FILENO);
-            close(stderr_fd);
-        }
         if (extra_fd >= 0 && extra_fd != 3) {
             dup2(extra_fd, 3);
-            close(extra_fd);
             fcntl(3, F_SETFD, 0);
+        }
+
+        if (stdout_fd >= 0 && stdout_fd != STDOUT_FILENO &&
+            stdout_fd != STDERR_FILENO && stdout_fd != 3)
+            close(stdout_fd);
+        if (stderr_fd >= 0 && stderr_fd != STDERR_FILENO &&
+            stderr_fd != STDOUT_FILENO && stderr_fd != 3 &&
+            stderr_fd != stdout_fd)
+            close(stderr_fd);
+        if (extra_fd >= 0 && extra_fd != 3 &&
+            extra_fd != STDOUT_FILENO && extra_fd != STDERR_FILENO)
+            close(extra_fd);
+
+        DIR* dir = opendir("/proc/self/fd");
+        if (dir) {
+            int dir_fd = dirfd(dir);
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != NULL) {
+                int fd = atoi(entry->d_name);
+                if (fd > 2 && fd != extra_fd && fd != dir_fd) {
+                    close(fd);
+                }
+            }
+            closedir(dir);
+        } else {
+            int max_fd = static_cast<int>(sysconf(_SC_OPEN_MAX));
+            if (max_fd < 0 || max_fd > 4096) max_fd = 1024;
+            for (int fd = 4; fd < max_fd; ++fd) close(fd);
         }
 
         vector<char*> argv_ptrs;
@@ -247,8 +446,11 @@ static string exec_argv_capture(const vector<string>& args) {
         close(pipefd[0]);
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
-        int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
+        int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        int devnull_r = open("/dev/null", O_RDONLY);
+        if (devnull_r >= 0) { dup2(devnull_r, STDIN_FILENO); close(devnull_r); }
+        for (int fd = 3; fd < 1024; ++fd) close(fd);
 
         vector<char*> argv_ptrs;
         argv_ptrs.reserve(args.size() + 1);
@@ -324,42 +526,23 @@ PrecheckResult precheck_transaction(const string& action, const vector<string>& 
     return has_changes ? PrecheckResult::Proceed : PrecheckResult::NoChanges;
 }
 
-static vector<string> build_apt_argv(const string& action, const vector<string>& pkgs, bool quiet) {
-    vector<string> argv = {"apt-get", "-y"};
-    if (quiet) argv.push_back("-qq");
-
-    if (action == "install" || action == "remove" || action == "purge") {
-        if (pkgs.empty()) return {};
-        argv.push_back(action);
-        for (const auto& p : pkgs) argv.push_back(p);
-        return argv;
-    }
-
-    if (action == "upgrade" || action == "dist-upgrade") {
-        argv.push_back(action);
-        return argv;
-    }
-
-    return {};
-}
-
-static vector<string> build_apt_install_argv(const vector<string>& args, bool quiet) {
-    if (args.empty()) return {};
-    vector<string> argv = {"apt-get", "-y"};
-    if (quiet) argv.push_back("-qq");
-    argv.push_back("install");
-    for (const auto& a : args) argv.push_back(a);
-    return argv;
-}
-
 void mount_fs() {
     exec_argv_devnull_out({"mount", "--bind", "/dev",      TREE_ROOT + "/dev"});
     exec_argv_devnull_out({"mount", "--bind", "/dev/pts",  TREE_ROOT + "/dev/pts"});
     exec_argv_devnull_out({"mount", "--bind", "/proc",     TREE_ROOT + "/proc"});
     exec_argv_devnull_out({"mount", "--bind", "/sys",      TREE_ROOT + "/sys"});
+
+    string resolv_target = TREE_ROOT + "/etc/resolv.conf";
+    if (!fs::exists("/etc/resolv.conf")) return;
+    error_code ec;
+    if (!fs::exists(resolv_target, ec)) {
+        ofstream touch(resolv_target);
+    }
+    exec_argv_devnull_out({"mount", "--bind", "/etc/resolv.conf", resolv_target});
 }
 
 void umount_fs() {
+    exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/etc/resolv.conf"});
     exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/dev/pts"});
     exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/dev"});
     exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/proc"});
@@ -402,7 +585,7 @@ static bool is_lv_thin(const string& lv_path) {
 static double get_vg_free_gb(const string& vg_name) {
     string out = exec_argv_capture({"vgs", "--noheadings", "-o", "vg_free", "--units", "g", vg_name});
     out = trim_str(out);
-        size_t g = out.find_first_of("gG");
+    size_t g = out.find_first_of("gG");
     if (g != string::npos) out = out.substr(0, g);
     try { return stod(out); } catch (...) { return 0.0; }
 }
@@ -425,7 +608,7 @@ bool manage_sandbox(const string& action) {
         exec_argv_devnull_out({"mkdir", "-p", "/nsm/napt"});
 
         if (root_dev.empty() || vg_name.empty()) {
-            cout << "Error: could not determine root LVM device or VG.\n";
+            cout << "E: Unable to determine the root LVM device or volume group.\n";
             return false;
         }
 
@@ -436,7 +619,7 @@ bool manage_sandbox(const string& action) {
         } else {
             double free_gb = get_vg_free_gb(vg_name);
             if (free_gb < 1.0) {
-                cout << "Error: not enough VG free space. Need 1GB, have " << free_gb << "GB.\n";
+                cout << "E: Insufficient free space in volume group: 1 GB required, " << free_gb << " GB available.\n";
                 return false;
             }
             string snap_size = "1G";
@@ -448,7 +631,23 @@ bool manage_sandbox(const string& action) {
         }
 
         if (rc != 0) {
-            cout << "Error: LVM snapshot of " << root_dev << " failed (rc=" << rc << ").\n";
+            cout << "E: LVM snapshot of " << root_dev << " failed (exit code " << rc << ").\n";
+            return false;
+        }
+
+        exec_argv_devnull_out({"lvchange", "-ay", "--ignoreactivationskip", snap_dev});
+        exec_argv_devnull_out({"udevadm", "settle"});
+
+        struct stat dev_st;
+        bool dev_ready = false;
+        for (int attempt = 0; attempt < 50; ++attempt) {
+            if (stat(snap_dev.c_str(), &dev_st) == 0 && S_ISBLK(dev_st.st_mode)) { dev_ready = true; break; }
+            usleep(100000);
+        }
+
+        if (!dev_ready) {
+            cout << "E: Snapshot device " << snap_dev << " did not become available in time.\n";
+            exec_argv_devnull_out({"lvremove", "-f", snap_dev});
             return false;
         }
 
@@ -465,7 +664,7 @@ bool manage_sandbox(const string& action) {
         }
 
         if (mount_rc != 0) {
-            cout << "Error: failed to mount snapshot to " << TREE_ROOT << " (rc=" << mount_rc << ").\n";
+            cout << "E: Unable to mount snapshot at " << TREE_ROOT << " (exit code " << mount_rc << ").\n";
             exec_argv_devnull_out({"lvremove", "-f", snap_dev});
             return false;
         }
@@ -493,6 +692,7 @@ bool manage_sandbox(const string& action) {
 
 void cleanup_sandbox_on_exit() {
     if (sandbox_created_and_mounted.load()) {
+        exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/etc/resolv.conf"});
         exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/dev/pts"});
         exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/dev"});
         exec_argv_devnull_out({"umount", "-l", TREE_ROOT + "/proc"});
@@ -547,7 +747,7 @@ void do_rollback(const string& prefix) {
     if (!nf_tree_available()) return;
     string root_snap = get_latest_snapshot("root-auto-" + prefix);
     if (!root_snap.empty()) {
-        cout << "Rolling back root: " << root_snap << "\n";
+        cout << "Rolling back to snapshot: " << root_snap << "\n";
         exec_argv_devnull_out({NF_TREE_BIN, "rollback", root_snap});
     }
 }
@@ -561,6 +761,34 @@ void safe_log(Args&&... args) {
     std::lock_guard<std::mutex> lock(g_cout_mutex);
     (std::cout << ... << std::forward<Args>(args));
     std::cout << std::flush;
+}
+
+string sanitize_filename(const string& raw) {
+    size_t pos_slash = raw.find_last_of('/');
+    string base = (pos_slash == string::npos) ? raw : raw.substr(pos_slash + 1);
+    size_t start = base.find_first_not_of(" \n\r\t");
+    string cleaned = (start == string::npos) ? "" : base.substr(start, base.find_last_not_of(" \n\r\t") - start + 1);
+    
+    string safe;
+    safe.reserve(cleaned.size());
+    for (char c : cleaned) {
+        if (isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-') {
+            safe.push_back(c);
+        }
+    }
+    while (!safe.empty() && (safe.front() == '-' || safe.front() == '.')) {
+        safe.erase(safe.begin());
+    }
+    if (safe == "." || safe == "..") safe = "safe_file";
+    return safe.empty() ? "safe_file" : safe;
+}
+
+string fetch_url(const string& url) {
+    if (url.empty()) return "";
+    size_t start = url.find_first_not_of(" \n\r\t");
+    string norm_url = (start == string::npos) ? "" : url.substr(start, url.find_last_not_of(" \n\r\t") - start + 1);
+    if (norm_url.front() == '-') return "";
+    return exec_argv_capture({"curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--connect-timeout", "10", "--max-time", "30", "--", norm_url});
 }
 
 string trim_copy(const string& s) {
@@ -579,6 +807,172 @@ bool ends_with(const string& value, const string& suffix) {
            value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+class NaptAcquireStatus final : public pkgAcquireStatus {
+    int fd;
+    bool show_host;
+    string label;
+    int last_shown = -1;
+public:
+    NaptAcquireStatus(int fd_, bool show_host_, string label_ = "packages")
+        : fd(fd_), show_host(show_host_), label(std::move(label_)) {}
+    bool MediaChange(string, string) override { return false; }
+    bool Pulse(pkgAcquire* owner) override {
+        pkgAcquireStatus::Pulse(owner);
+        int pct = static_cast<int>(Percent);
+        if (fd >= 0) {
+            string line = "dlstatus:0:" + to_string(Percent) + ":Downloading\n";
+            ssize_t written = write(fd, line.c_str(), line.size());
+            (void)written;
+        } else if (show_host && pct != last_shown) {
+            cout << "\rDownloading " << label << ": " << pct << "%   " << flush;
+            last_shown = pct;
+        }
+        return true;
+    }
+    void Stop() override {
+        pkgAcquireStatus::Stop();
+        if (fd < 0 && show_host) cout << "\n";
+    }
+};
+
+static string local_deb_package_name(const string& path) {
+    FileFd fd;
+    if (!fd.Open(path, FileFd::ReadOnly)) return "";
+    debDebFile deb(fd);
+    debDebFile::MemControlExtract extract;
+    if (!extract.Read(deb)) return "";
+    return extract.Section.FindS("Package");
+}
+
+static bool register_local_debs(pkgSourceList* src_list, const vector<string>& targets,
+                                 map<string, string>& local_pkg_names, bool quiet) {
+    for (const auto& t : targets) {
+        if (!ends_with(t, ".deb")) continue;
+        string pkg_name = local_deb_package_name(t);
+        if (pkg_name.empty()) {
+            if (!quiet) cout << "Could not determine package name for " << t << ".\n";
+            _error->DumpErrors();
+            return false;
+        }
+        if (!src_list->AddVolatileFile(t)) {
+            if (!quiet) cout << "Failed to register local package " << t << ".\n";
+            _error->DumpErrors();
+            return false;
+        }
+        local_pkg_names[t] = pkg_name;
+    }
+    return true;
+}
+
+bool run_libapt_transaction(const string& action, const vector<string>& targets,
+                             int status_fd, bool quiet) {
+    if (status_fd >= 0) _config->Set("APT::Status-Fd", status_fd);
+    _config->Set("Dpkg::Use-Pty", "false");
+
+    pkgCacheFile cache_file;
+    pkgSourceList* src_list = cache_file.GetSourceList();
+    if (src_list == nullptr) { _error->DumpErrors(); return false; }
+
+    map<string, string> local_pkg_names;
+    if (!register_local_debs(src_list, targets, local_pkg_names, quiet)) return false;
+
+    pkgCache* cache = cache_file.GetPkgCache();
+    pkgDepCache* dep_cache = cache_file.GetDepCache();
+    if (cache == nullptr || dep_cache == nullptr) { _error->DumpErrors(); return false; }
+
+    pkgProblemResolver fixer(dep_cache);
+
+    if (action == "install") {
+        for (const auto& t : targets) {
+            string pkg_name = ends_with(t, ".deb") ? local_pkg_names[t] : t;
+            pkgCache::PkgIterator pkg = cache->FindPkg(pkg_name);
+            if (pkg.end()) {
+                if (!quiet) cout << "Package " << pkg_name << " not found.\n";
+                return false;
+            }
+            fixer.Clear(pkg);
+            fixer.Protect(pkg);
+            dep_cache->MarkInstall(pkg, true);
+            if (!(*dep_cache)[pkg].Install()) {
+                if (!quiet) cout << "Unable to mark " << pkg_name << " for installation.\n";
+                _error->DumpErrors();
+                return false;
+            }
+        }
+    } else if (action == "remove" || action == "purge") {
+        bool purge = (action == "purge");
+        for (const auto& pkg_name : targets) {
+            pkgCache::PkgIterator pkg = cache->FindPkg(pkg_name);
+            if (pkg.end()) continue;
+            fixer.Clear(pkg);
+            fixer.Protect(pkg);
+            dep_cache->MarkDelete(pkg, purge);
+        }
+    } else if (action == "upgrade") {
+        if (!APT::Upgrade::Upgrade(*dep_cache,
+                APT::Upgrade::FORBID_REMOVE_PACKAGES | APT::Upgrade::FORBID_INSTALL_NEW_PACKAGES)) {
+            _error->DumpErrors();
+            return false;
+        }
+    } else if (action == "dist-upgrade") {
+        if (!APT::Upgrade::Upgrade(*dep_cache, APT::Upgrade::ALLOW_EVERYTHING)) {
+            _error->DumpErrors();
+            return false;
+        }
+    } else {
+        if (!quiet) cout << "Unknown transaction: " << action << ".\n";
+        return false;
+    }
+
+    if (!fixer.Resolve(true) || _error->PendingError()) {
+        if (!quiet) cout << "Unable to resolve dependencies for this transaction.\n";
+        _error->DumpErrors();
+        return false;
+    }
+
+    unique_ptr<pkgPackageManager> pm(_system->CreatePM(dep_cache));
+    if (!pm) { _error->DumpErrors(); return false; }
+
+    pkgAcquire fetcher;
+    pkgRecords recs(*cache);
+
+    if (!pm->GetArchives(&fetcher, src_list, &recs) || _error->PendingError()) {
+        _error->DumpErrors();
+        return false;
+    }
+
+    if (!quiet && status_fd < 0) {
+        unsigned long long need = fetcher.FetchNeeded();
+        if (need > 0) {
+            if (need < 1024 * 1024)
+                cout << "Downloading packages (" << (need / 1024) << " KB)...\n";
+            else
+                cout << "Downloading packages (" << (need / 1024 / 1024) << " MB)...\n";
+        }
+    }
+
+    NaptAcquireStatus acquire_status(status_fd, !quiet && status_fd < 0);
+    fetcher.SetLog(&acquire_status);
+    if (fetcher.Run() != pkgAcquire::Continue) {
+        _error->DumpErrors();
+        return false;
+    }
+
+    unique_ptr<APT::Progress::PackageManager> pm_progress;
+    if (status_fd >= 0)
+        pm_progress = make_unique<APT::Progress::PackageManagerProgressFd>(status_fd);
+    else
+        pm_progress = make_unique<APT::Progress::PackageManager>();
+
+    pkgPackageManager::OrderResult result = pm->DoInstall(pm_progress.get());
+    if (result != pkgPackageManager::Completed) {
+        _error->DumpErrors();
+        return false;
+    }
+
+    return true;
+}
+
 bool path_is_directory(const string& path) {
     struct stat st;
     return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
@@ -593,29 +987,6 @@ string path_basename(const string& path) {
     size_t pos = path.find_last_of('/');
     if (pos == string::npos) return path;
     return path.substr(pos + 1);
-}
-
-string sanitize_filename(const string& raw) {
-    string cleaned = path_basename(trim_copy(raw));
-    string safe;
-    safe.reserve(cleaned.size());
-    for (char c : cleaned) {
-        if (isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-') {
-            safe.push_back(c);
-        }
-    }
-    while (!safe.empty() && (safe.front() == '-' || safe.front() == '.')) {
-        safe.erase(safe.begin());
-    }
-    if (safe == "." || safe == "..") safe = "safe_file";
-    return safe.empty() ? "safe_file" : safe;
-}
-
-string fetch_url(const string& url) {
-    if (url.empty()) return "";
-    string norm_url = trim_copy(url);
-    if (norm_url.front() == '-') return "";
-    return exec_argv_capture({"curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--retry", "3", "--retry-delay", "1", "--connect-timeout", "10", "--max-time", "30", "--", norm_url});
 }
 
 string normalize_napt_base_url(const string& raw_url) {
@@ -646,11 +1017,9 @@ void print_napt_repo_warning(const string& url) {
     static set<string> warned_repos;
     if (warned_repos.count(url)) return;
     warned_repos.insert(url);
-    cout << " You are installing packages from an unauthorized third-party napt repository:\n"
-         << " " << url << "\n"
-         << " These packages are UNVERIFIED and could contain MALWARE, RANSOMWARE, or\n"
-         << " utterly DESTROY your operating system.\n"
-         << " ONLY PROCEED IF YOU ABSOLUTELY TRUST THE SOURCE!\n";
+    cout << "W: Repository not authenticated: " << url << "\n"
+         << "W: Packages originating from this source are unverified and may pose a security risk.\n"
+         << "W: Proceed only if this repository is trusted.\n";
 }
 
 bool parse_napt_source_line(const string& raw_line, NaptSource& source) {
@@ -680,25 +1049,25 @@ void load_napt_sources_from_file(const string& path, vector<NaptSource>& sources
 
 vector<NaptSource> load_napt_sources() {
     vector<NaptSource> sources;
-    if (path_is_regular_file(NAPT_SOURCES_PATH)) {
-        load_napt_sources_from_file(NAPT_SOURCES_PATH, sources);
-        return sources;
-    }
 
-    if (path_is_directory(NAPT_SOURCES_PATH)) {
-        DIR* dir = opendir(NAPT_SOURCES_PATH.c_str());
-        if (!dir) return sources;
-        vector<string> files;
-        struct dirent* entry;
-        while ((entry = readdir(dir)) != NULL) {
-            string name = entry->d_name;
-            if (name == "." || name == "..") continue;
-            string path = NAPT_SOURCES_PATH + "/" + name;
-            if (path_is_regular_file(path)) files.push_back(path);
+    if (path_is_regular_file(NAPT_SOURCES_FILE))
+        load_napt_sources_from_file(NAPT_SOURCES_FILE, sources);
+
+    if (path_is_directory(NAPT_SOURCES_DIR)) {
+        DIR* dir = opendir(NAPT_SOURCES_DIR.c_str());
+        if (dir != nullptr) {
+            vector<string> files;
+            struct dirent* entry;
+            while ((entry = readdir(dir)) != NULL) {
+                string name = entry->d_name;
+                if (name == "." || name == "..") continue;
+                string path = NAPT_SOURCES_DIR + "/" + name;
+                if (path_is_regular_file(path)) files.push_back(path);
+            }
+            closedir(dir);
+            sort(files.begin(), files.end());
+            for (const auto& path : files) load_napt_sources_from_file(path, sources);
         }
-        closedir(dir);
-        sort(files.begin(), files.end());
-        for (const auto& path : files) load_napt_sources_from_file(path, sources);
     }
 
     return sources;
@@ -877,6 +1246,68 @@ string format_bytes(uint64_t bytes) {
     return string(buf);
 }
 
+class TerminalProgressBar {
+public:
+    static string render(int percentage, const string& action_label, const string& extra_stats = "", int bar_width = 22) {
+        if (percentage < 0) percentage = 0;
+        if (percentage > 100) percentage = 100;
+
+        int filled = (percentage * bar_width) / 100;
+        int empty = bar_width - filled;
+
+        string bar;
+        for (int i = 0; i < filled; ++i) bar += "\u2588";
+        for (int i = 0; i < empty; ++i)  bar += "\u2591";
+
+        string cyan_bold = "\033[1;36m";
+        string green = "\033[38;2;52;211;153m";
+        string gray = "\033[38;2;148;163;184m";
+        string reset = "\033[0m";
+
+        ostringstream oss;
+        char pct_buf[16];
+        snprintf(pct_buf, sizeof(pct_buf), "%3d%%", percentage);
+        oss << "\r " << cyan_bold << pct_buf << reset << " ["
+            << green << bar << reset << "] "
+            << action_label;
+        if (!extra_stats.empty()) {
+            oss << " " << gray << "(" << extra_stats << ")" << reset;
+        }
+        oss << "   ";
+        return oss.str();
+    }
+};
+
+class ETAEstimator {
+    chrono::steady_clock::time_point start_time;
+public:
+    ETAEstimator() : start_time(chrono::steady_clock::now()) {}
+
+    void reset() {
+        start_time = chrono::steady_clock::now();
+    }
+
+    string get_stats(int current_percent) {
+        if (current_percent <= 0) return "Calculating...";
+        auto now = chrono::steady_clock::now();
+        double elapsed_sec = chrono::duration_cast<chrono::duration<double>>(now - start_time).count();
+        if (elapsed_sec < 0.25) return "Estimating...";
+
+        double pct_per_sec = static_cast<double>(current_percent) / elapsed_sec;
+        if (pct_per_sec <= 0.001) return "Calculating...";
+
+        double remaining_pct = 100.0 - current_percent;
+        double remaining_sec = remaining_pct / pct_per_sec;
+
+        int mins = static_cast<int>(remaining_sec) / 60;
+        int secs = static_cast<int>(remaining_sec) % 60;
+
+        char buf[64];
+        snprintf(buf, sizeof(buf), "ETA: %02d:%02d", mins, secs);
+        return string(buf);
+    }
+};
+
 vector<NaptRepoMetadata> load_cached_napt_metadata();
 
 bool autoclean_napt_cache() {
@@ -922,9 +1353,14 @@ bool autoclean_napt_cache() {
     return true;
 }
 
-void print_install_already_present_message(const string& pkg_name) {
-    cout << pkg_name << " is already installed. For upgrades, use napt upgrade "
-         << pkg_name << " or just napt upgrade. If it is a huge package, use --apply-host.\n";
+void print_install_already_present_message(const string& pkg_name, bool is_upgrade) {
+    if (is_upgrade) {
+        cout << pkg_name << " is already up to date.\n";
+        return;
+    }
+    cout << pkg_name << " is already installed. To upgrade it, run napt upgrade "
+         << pkg_name << ", or napt upgrade with no arguments to upgrade all packages.\n"
+         << "For large transactions, --apply-host skips the chroot verification step.\n";
 }
 
 vector<NaptRepoMetadata> load_cached_napt_metadata() {
@@ -1021,7 +1457,7 @@ bool cache_napt_package(const NaptPackageCandidate& candidate, string& local_pat
     local_path = release_dir + "/" + safe_file;
     string url = build_napt_download_url(candidate);
     if (url.empty() || url.front() == '-') return false;
-    return exec_argv_devnull_out({"curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--retry", "3", "--retry-delay", "1", "--connect-timeout", "10", "-o", local_path, "--", url}) == 0;
+    return exec_argv_devnull_out({"curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "-o", local_path, "--", url}) == 0;
 }
 
 string calculate_sha256(const string& file_path) {
@@ -1029,29 +1465,6 @@ string calculate_sha256(const string& file_path) {
     size_t space_pos = out.find(' ');
     if (space_pos != string::npos) return out.substr(0, space_pos);
     return trim_copy(out);
-}
-
-struct DebFileInfo {
-    string package_name;
-    string version;
-    string architecture;
-};
-
-bool get_deb_file_info(const string& path, DebFileInfo& info) {
-    string out = exec_argv_capture({"dpkg-deb", "--field", path, "Package", "Version", "Architecture"});
-    if (out.empty()) return false;
-    istringstream ss(out);
-    string line;
-    while (getline(ss, line)) {
-        size_t colon = line.find(':');
-        if (colon == string::npos) continue;
-        string key   = trim_copy(line.substr(0, colon));
-        string value = trim_copy(line.substr(colon + 1));
-        if (key == "Package")           info.package_name = value;
-        else if (key == "Version")      info.version      = value;
-        else if (key == "Architecture") info.architecture = value;
-    }
-    return !info.package_name.empty();
 }
 
 struct PendingNaptDownload {
@@ -1062,9 +1475,98 @@ struct PendingNaptDownload {
     string error_msg;
 };
 
-bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecision>& decisions, bool quiet) {
+static bool download_napt_packages(vector<PendingNaptDownload>& pending_napt_downloads, vector<InstallDecision>& decisions, bool quiet) {
+    if (pending_napt_downloads.empty()) return true;
+
+    size_t num_threads = std::min<size_t>(4, pending_napt_downloads.size());
+    vector<thread> workers;
+    std::atomic<size_t> current_index(0);
+
+    for (size_t t = 0; t < num_threads; ++t) {
+        workers.emplace_back([&]() {
+            while (true) {
+                size_t idx = current_index.fetch_add(1);
+                if (idx >= pending_napt_downloads.size()) break;
+
+                auto& pending = pending_napt_downloads[idx];
+                if (!quiet) safe_log("Downloading Napt package: ", pending.pkg_name, "...\n");
+                auto start_time = chrono::steady_clock::now();
+                if (!cache_napt_package(pending.candidate, pending.local_path)) {
+                    pending.error_msg = "E: Failed to download " + pending.pkg_name + " from the Napt repository.";
+                    continue;
+                }
+                auto end_time = chrono::steady_clock::now();
+                double elapsed_sec = chrono::duration_cast<chrono::duration<double>>(end_time - start_time).count();
+
+                if (pending.candidate.sha256.empty()) {
+                    pending.error_msg = "E: SHA256 checksum is missing in metadata for package " + pending.pkg_name + ".\nE: Refusing to install unverified package.";
+                    exec_argv_devnull_out({"rm", "-f", pending.local_path});
+                    continue;
+                }
+
+                string local_hash = calculate_sha256(pending.local_path);
+                if (local_hash != pending.candidate.sha256) {
+                    pending.error_msg = "E: SHA256 checksum mismatch for " + pending.pkg_name + ".\nE: Expected: " + pending.candidate.sha256 + "\nE: Got:      " + local_hash + "\nE: Aborting installation of this package.";
+                    exec_argv_devnull_out({"rm", "-f", pending.local_path});
+                    continue;
+                }
+
+                error_code ec;
+                uint64_t file_sz = fs::file_size(pending.local_path, ec);
+                string sz_str = (!ec && file_sz > 0) ? format_bytes(file_sz) : "";
+                string speed_str = "";
+                if (!ec && file_sz > 0 && elapsed_sec > 0.005) {
+                    double bytes_per_sec = static_cast<double>(file_sz) / elapsed_sec;
+                    speed_str = format_bytes(static_cast<uint64_t>(bytes_per_sec)) + "/s";
+                }
+
+                if (!quiet) {
+                    string checkmark = "\033[1;32m✔\033[0m";
+                    string cyan = "\033[1;36m";
+                    string gray = "\033[38;2;148;163;184m";
+                    string reset = "\033[0m";
+                    string details = "";
+                    if (!sz_str.empty()) details += sz_str;
+                    if (!speed_str.empty()) details += (details.empty() ? "" : " | ") + speed_str;
+
+                    safe_log(" ", checkmark, " ", cyan, pending.pkg_name, reset,
+                             (!details.empty() ? " " + gray + "(" + details + ")" + reset : ""),
+                             "\n");
+                }
+                pending.success = true;
+            }
+        });
+    }
+
+    for (auto& w : workers) {
+        if (w.joinable()) w.join();
+    }
+
+    bool ok = true;
+    for (const auto& pending : pending_napt_downloads) {
+        if (!pending.success) {
+            if (!quiet) safe_log(pending.error_msg, "\n");
+            ok = false;
+        } else {
+            InstallDecision decision;
+            decision.package_name     = pending.pkg_name;
+            decision.apt_argument     = pending.local_path;
+            decision.selected_version = pending.candidate.version;
+            decision.from_napt        = true;
+            decisions.push_back(decision);
+            if (!quiet) {
+                safe_log("Selected ", pending.pkg_name, 
+                         (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""),
+                         " from the Napt repository.\n");
+            }
+        }
+    }
+    return ok;
+}
+
+bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecision>& decisions, bool quiet, bool is_upgrade = false) {
     if (pkgs.empty()) {
-        if (!quiet) cout << "No packages were specified.\n";
+        if (!quiet) cout << "E: No packages were specified.\n";
         return false;
     }
 
@@ -1076,27 +1578,20 @@ bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecisio
     for (const auto& pkg_name : pkgs) {
         if (ends_with(pkg_name, ".deb")) {
             if (!path_is_regular_file(pkg_name)) {
-                if (!quiet) cout << "Local .deb file not found: " << pkg_name << "\n";
+                if (!quiet) cout << "E: Unable to locate local package file: " << pkg_name << ".\n";
                 had_error = true;
                 continue;
             }
-            DebFileInfo deb_info;
-            bool has_info = get_deb_file_info(pkg_name, deb_info);
-            if (!quiet) {
-                cout << "Installing local .deb: ";
-                if (has_info) {
-                    cout << deb_info.package_name;
-                    if (!deb_info.version.empty())      cout << " (" << deb_info.version << ")";
-                    if (!deb_info.architecture.empty()) cout << " [" << deb_info.architecture << "]";
-                } else {
-                    cout << pkg_name;
-                }
-                cout << "\n";
-            }
+            error_code ec;
+            fs::path abs_path = fs::absolute(pkg_name, ec);
+            if (!ec) abs_path = fs::weakly_canonical(abs_path, ec);
+            string resolved_path = ec ? pkg_name : abs_path.string();
+
+            if (!quiet) cout << "Selecting local package archive: " << resolved_path << ".\n";
             InstallDecision decision;
-            decision.package_name     = has_info ? deb_info.package_name : pkg_name;
-            decision.apt_argument     = pkg_name;
-            decision.selected_version = has_info ? deb_info.version : "";
+            decision.package_name     = resolved_path;
+            decision.apt_argument     = resolved_path;
+            decision.selected_version = "";
             decision.from_napt        = false;
             decisions.push_back(decision);
             continue;
@@ -1106,7 +1601,7 @@ bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecisio
         NaptPackageCandidate napt_candidate = find_best_napt_candidate(repos, pkg_name);
 
         if (!apt_state.found && !napt_candidate.found) {
-            if (!quiet) cout << "Package " << pkg_name << " not found.\n";
+            if (!quiet) cout << "E: Unable to locate package " << pkg_name << ".\n";
             had_error = true;
             continue;
         }
@@ -1122,7 +1617,7 @@ bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecisio
         if (use_napt) {
             print_napt_repo_warning(napt_candidate.base_url);
             if (apt_state.installed && compare_versions(apt_state.installed_version, napt_candidate.version) >= 0) {
-                if (!quiet) print_install_already_present_message(pkg_name);
+                if (!quiet) print_install_already_present_message(pkg_name, is_upgrade);
                 continue;
             }
             pending_napt_downloads.push_back({pkg_name, napt_candidate, "", false, ""});
@@ -1130,13 +1625,13 @@ bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecisio
         }
 
         if (!apt_state.found || apt_state.candidate_version.empty()) {
-            if (!quiet) cout << "Package " << pkg_name << " not found.\n";
+            if (!quiet) cout << "E: Unable to locate package " << pkg_name << ".\n";
             had_error = true;
             continue;
         }
 
         if (apt_state.installed && compare_versions(apt_state.installed_version, apt_state.candidate_version) >= 0) {
-            if (!quiet) print_install_already_present_message(pkg_name);
+            if (!quiet) print_install_already_present_message(pkg_name, is_upgrade);
             continue;
         }
 
@@ -1147,86 +1642,26 @@ bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecisio
         decision.from_napt        = false;
         decisions.push_back(decision);
         if (!quiet) {
-            cout << "Using Debian package for " << pkg_name;
+            cout << "Selected " << pkg_name;
             if (!apt_state.candidate_version.empty()) cout << " (" << apt_state.candidate_version << ")";
-            cout << ".\n";
+            cout << " from the Debian archive.\n";
         }
     }
 
-    if (!pending_napt_downloads.empty()) {
-        size_t num_threads = std::min<size_t>(4, pending_napt_downloads.size());
-        vector<thread> workers;
-        std::atomic<size_t> current_index(0);
-
-        for (size_t t = 0; t < num_threads; ++t) {
-            workers.emplace_back([&]() {
-                while (true) {
-                    size_t idx = current_index.fetch_add(1);
-                    if (idx >= pending_napt_downloads.size()) break;
-
-                    auto& pending = pending_napt_downloads[idx];
-                    if (!quiet) safe_log("Downloading Napt package: ", pending.pkg_name, "...\n");
-
-                    if (!cache_napt_package(pending.candidate, pending.local_path)) {
-                        pending.error_msg = "Failed to download Napt package for " + pending.pkg_name + ".";
-                        continue;
-                    }
-
-                    if (pending.candidate.sha256.empty()) {
-                        pending.error_msg = "E: SHA256 checksum is missing in metadata for package " + pending.pkg_name + ".\nRefusing to install unverified package.";
-                        exec_argv_devnull_out({"rm", "-f", pending.local_path});
-                        continue;
-                    }
-
-                    string local_hash = calculate_sha256(pending.local_path);
-                    if (local_hash != pending.candidate.sha256) {
-                        pending.error_msg = "SHA256 checksum mismatch for " + pending.pkg_name + ".\nExpected: " + pending.candidate.sha256 + "\nGot:      " + local_hash + "\nAborting installation of this package.";
-                        exec_argv_devnull_out({"rm", "-f", pending.local_path});
-                        continue;
-                    }
-
-                    error_code ec;
-                    uint64_t file_sz = fs::file_size(pending.local_path, ec);
-                    string sz_str = (!ec && file_sz > 0) ? (" [" + format_bytes(file_sz) + "]") : "";
-
-                    if (!quiet) safe_log("Downloaded ", pending.pkg_name, sz_str, " [OK]\n");
-                    pending.success = true;
-                }
-            });
-        }
-
-        for (auto& w : workers) {
-            if (w.joinable()) w.join();
-        }
-
-        for (const auto& pending : pending_napt_downloads) {
-            if (!pending.success) {
-                if (!quiet) safe_log(pending.error_msg, "\n");
-                had_error = true;
-            } else {
-                InstallDecision decision;
-                decision.package_name     = pending.pkg_name;
-                decision.apt_argument     = pending.local_path;
-                decision.selected_version = pending.candidate.version;
-                decision.from_napt        = true;
-                decisions.push_back(decision);
-                if (!quiet) {
-                    safe_log("Using Napt package for ", pending.pkg_name, 
-                             (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""), ".\n");
-                }
-            }
-        }
+    if (!download_napt_packages(pending_napt_downloads, decisions, quiet)) {
+        had_error = true;
     }
 
     return !had_error;
 }
 
 void do_nflinux_upgrade(bool apply_host) {
+    (void)apply_host;
 #ifdef nflinux
     global_config_backup.backup();
 
-    string os_release = fetch_url("https://nextferret.github.io/etc/os-release-arm");
-    string codenames = fetch_url("https://nextferret.github.io/version_codename-arm");
+    string os_release = fetch_url("https://nextferret.github.io/etc/os-release");
+    string codenames = fetch_url("https://nextferret.github.io/version_codename");
     string repo_number_str = trim_copy(fetch_url("https://nextferret.github.io/repo-number"));
     string napt_sources = "";
     string apt_sources = "";
@@ -1268,82 +1703,73 @@ void do_nflinux_upgrade(bool apply_host) {
 #endif
 }
 
-static const int PROGRESS_BAR_WIDTH = 18;
-
-static string format_remaining(double seconds) {
-    int s = static_cast<int>(seconds);
-    if (s <= 0) return "0s";
-    if (s < 60) return to_string(s) + "s";
-    int m = s / 60, r = s % 60;
-    return to_string(m) + "m " + to_string(r) + "s";
-}
-
-static void render_chroot_bar(int filled, const string& time_str) {
-    string bar(filled, '#');
-    bar += string(PROGRESS_BAR_WIDTH - filled, ' ');
-    string line = "\rTesting on the chroot                        ["
-                  + bar + "] Estimated Time:" + time_str;
-    line += string(max(0, 20 - static_cast<int>(time_str.size())), ' ');
-    cout << line;
-    cout.flush();
-}
-
-static vector<string> stage_debs_for_chroot(const vector<string>& orig_argv, vector<string>& staged_host_paths) {
-    vector<string> rewritten;
-    for (const auto& token : orig_argv) {
-        if (token.size() > 4 && ends_with(token, ".deb")) {
-            string filename = path_basename(token);
-            string chroot_tmp_host  = TREE_ROOT + "/tmp/" + filename;
-            string chroot_tmp_inner = "/tmp/" + filename;
-            exec_argv_devnull_out({"mkdir", "-p", TREE_ROOT + "/tmp"});
-            int rc = exec_argv_devnull_out({"cp", token, chroot_tmp_host});
-            if (rc != 0) cout << "Error: failed to stage " << token << " into chroot tmp.\n";
-            staged_host_paths.push_back(chroot_tmp_host);
-            rewritten.push_back(chroot_tmp_inner);
-        } else {
-            rewritten.push_back(token);
-        }
+vector<string> bind_mount_local_deb_dirs(const vector<string>& targets) {
+    set<string> parents;
+    for (const auto& t : targets) {
+        if (!ends_with(t, ".deb")) continue;
+        fs::path parent = fs::path(t).parent_path();
+        if (!parent.empty()) parents.insert(parent.string());
     }
-    return rewritten;
+
+    vector<string> mounted;
+    for (const auto& parent : parents) {
+        string target = TREE_ROOT + parent;
+        error_code ec;
+        fs::create_directories(target, ec);
+        if (ec) continue;
+        exec_argv_devnull_out({"mount", "--bind", parent, target});
+        mounted.push_back(target);
+    }
+    return mounted;
 }
 
-static void cleanup_staged_debs(const vector<string>& staged_host_paths) {
-    for (const auto& p : staged_host_paths)
-        exec_argv_devnull_out({"rm", "-f", p});
+void unbind_local_deb_dirs(const vector<string>& mounted) {
+    for (auto it = mounted.rbegin(); it != mounted.rend(); ++it)
+        exec_argv_devnull_out({"umount", "-l", *it});
 }
 
-void perform_transaction_argv(const vector<string>& transaction_argv, bool apply_host) {
+void perform_transaction_argv(const string& action, const vector<string>& targets, bool apply_host) {
     if (!apply_host) {
         if (!manage_sandbox("create")) {
             cout << "Aborting transaction: chroot could not be created.\n";
             return;
         }
         mount_fs();
+        vector<string> local_deb_mounts = bind_mount_local_deb_dirs(targets);
 
         int apt_pipe[2]  = {-1, -1};
         bool have_pipe   = (pipe(apt_pipe) == 0);
         int err_pipe[2]  = {-1, -1};
         bool have_err    = (pipe2(err_pipe, O_CLOEXEC) == 0);
 
-        vector<string> staged_debs;
-        vector<string> chroot_argv = stage_debs_for_chroot(transaction_argv, staged_debs);
-
-        if (have_pipe) {
-            chroot_argv.push_back("-o");
-            chroot_argv.push_back("APT::Status-Fd=3");
-        }
-
+        cout.flush();
+        cerr.flush();
         pid_t pid = fork();
         if (pid == 0) {
             if (chroot(TREE_ROOT.c_str()) != 0 || chdir("/") != 0) {
                 if (have_err) {
                     const char* msg = "chroot/chdir failed\n";
-                    write(err_pipe[1], msg, strlen(msg));
+                    ssize_t written = write(err_pipe[1], msg, strlen(msg));
+                    (void)written;
                 }
                 _exit(1);
             }
 
-            int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
+            if (g_enable_seccomp) {
+                string seccomp_err;
+                if (!ChrootSeccompManager::apply_filter(seccomp_err)) {
+                    if (have_err && !seccomp_err.empty()) {
+                        string msg = "W: SECCOMP filter notice: " + seccomp_err + "\n";
+                        ssize_t written = write(err_pipe[1], msg.c_str(), msg.size());
+                        (void)written;
+                    }
+                }
+            }
+
+            int devnull_r = open("/dev/null", O_RDONLY);
+            if (devnull_r >= 0) { dup2(devnull_r, STDIN_FILENO); close(devnull_r); }
+
+            int devnull = open("/dev/null", O_WRONLY);
             if (devnull >= 0) { dup2(devnull, STDOUT_FILENO); close(devnull); }
 
             if (have_err) {
@@ -1353,35 +1779,39 @@ void perform_transaction_argv(const vector<string>& transaction_argv, bool apply
                     close(err_pipe[1]);
                 }
             } else {
-                int dn2 = open("/dev/null", O_WRONLY | O_CLOEXEC);
+                int dn2 = open("/dev/null", O_WRONLY);
                 if (dn2 >= 0) { dup2(dn2, STDERR_FILENO); close(dn2); }
             }
 
+            int status_fd = -1;
             if (have_pipe) {
                 close(apt_pipe[0]);
                 if (apt_pipe[1] != 3) { dup2(apt_pipe[1], 3); close(apt_pipe[1]); }
                 fcntl(3, F_SETFD, 0);
+                status_fd = 3;
             }
+
+            for (int fd = 4; fd < 1024; ++fd) close(fd);
 
             pkgInitConfig(*_config);
             pkgInitSystem(*_config, _system);
 
-            vector<char*> argv_ptrs;
-            argv_ptrs.reserve(chroot_argv.size() + 1);
-            for (const auto& a : chroot_argv) argv_ptrs.push_back(const_cast<char*>(a.c_str()));
-            argv_ptrs.push_back(nullptr);
-
             setenv("DEBIAN_FRONTEND", "noninteractive", 1);
-            execvp(argv_ptrs[0], argv_ptrs.data());
-            _exit(127);
+            bool ok = run_libapt_transaction(action, targets, status_fd, true);
+            cout.flush();
+            cerr.flush();
+            _exit(ok ? 0 : 1);
 
         } else if (pid > 0) {
             if (have_pipe) close(apt_pipe[1]);
             if (have_err)  close(err_pipe[1]);
 
-            std::atomic<double> apt_percent(0.0);
-            std::atomic<bool>   display_done(false);
+            cout << "\033[1;36m==>\033[0m Verifying transaction in isolated sandbox"
+                 << (g_enable_seccomp ? " (SECCOMP BPF active)...\n" : "...\n");
+
+            std::atomic<int> apt_percent(-1);
             string child_stderr_output;
+            ETAEstimator chroot_eta;
 
             std::thread stderr_reader([&]() {
                 if (!have_err) return;
@@ -1399,6 +1829,7 @@ void perform_transaction_argv(const vector<string>& transaction_argv, bool apply
                 FILE* f = fdopen(apt_pipe[0], "r");
                 if (!f) { close(apt_pipe[0]); return; }
                 char line[512];
+                int last_shown = -1;
                 while (fgets(line, sizeof(line), f) != NULL) {
                     string s(line);
                     bool is_pm = (s.size() > 9 && s.substr(0, 9) == "pmstatus:");
@@ -1412,90 +1843,50 @@ void perform_transaction_argv(const vector<string>& transaction_argv, bool apply
                     if (c3 == string::npos) continue;
                     string pct_str = s.substr(c2 + 1, c3 - c2 - 1);
                     try {
-                        double pct = stod(pct_str);
+                        int pct = static_cast<int>(stod(pct_str));
                         if (pct > apt_percent.load()) apt_percent.store(pct);
+                        int current = apt_percent.load();
+                        if (current != last_shown) {
+                            cout << TerminalProgressBar::render(current, "Sandbox Verification", chroot_eta.get_stats(current)) << flush;
+                            last_shown = current;
+                        }
                     } catch (...) {}
                 }
                 fclose(f);
             });
 
-            std::thread display_thread([&]() {
-                auto start = std::chrono::steady_clock::now();
-                while (!display_done.load()) {
-                    double pct = apt_percent.load();
-                    auto now = std::chrono::steady_clock::now();
-                    double elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() / 1000.0;
-                    int filled;
-                    string time_str;
-                    if (have_pipe) {
-                        filled = static_cast<int>((pct / 100.0) * PROGRESS_BAR_WIDTH);
-                        filled = min(filled, PROGRESS_BAR_WIDTH - 1);
-                        if (pct > 2.0 && elapsed > 1.0) {
-                            double remaining = elapsed * (100.0 - pct) / pct;
-                            time_str = format_remaining(remaining);
-                        } else {
-                            time_str = "estimating...";
-                        }
-                    } else {
-                        filled = min(PROGRESS_BAR_WIDTH - 1,
-                                     static_cast<int>(elapsed / 120.0 * PROGRESS_BAR_WIDTH));
-                        time_str = format_remaining(max(0.0, 120.0 - elapsed));
-                    }
-                    render_chroot_bar(filled, time_str);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                }
-            });
-
             int status = 0;
             bool waited = wait_for_child(pid, status);
 
-            display_done.store(true);
-            display_thread.join();
             reader_thread.join();
             stderr_reader.join();
 
-            int filled_final;
-            {
-                double pct = apt_percent.load();
-                filled_final = static_cast<int>((pct / 100.0) * PROGRESS_BAR_WIDTH);
-                filled_final = min(filled_final, PROGRESS_BAR_WIDTH - 1);
-            }
-
+            unbind_local_deb_dirs(local_deb_mounts);
             umount_fs();
-            cleanup_staged_debs(staged_debs);
             manage_sandbox("delete");
-
-            auto print_bar = [&](const string& suffix) {
-                string bar(filled_final, '#');
-                bar += string(PROGRESS_BAR_WIDTH - filled_final, ' ');
-                cout << "\rTesting on the chroot                        ["
-                     << bar << "]                           " << suffix << "\n";
-            };
 
             if (!waited) {
                 global_config_backup.restore_orig();
-                print_bar("...  chroot test interrupted.");
+                cout << "\n\033[1;31mE:\033[0m Chroot verification interrupted.\n";
                 return;
             }
             if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
                 global_config_backup.restore_orig();
-                print_bar("...  chroot test failed.");
+                cout << "\n\033[1;31mE:\033[0m Chroot verification failed.\n";
                 if (!child_stderr_output.empty()) {
-                    cout << "\n--- chroot apt error ---\n" << child_stderr_output;
+                    cout << "---- chroot error output ----\n" << child_stderr_output;
                     if (child_stderr_output.back() != '\n') cout << '\n';
-                    cout << "------------------------\n";
+                    cout << "------------------------------\n";
                 }
                 return;
             }
 
-            cout << "\rTesting on the chroot                        ["
-                 << string(PROGRESS_BAR_WIDTH, '#') << "] Estimated Time:done          \n";
+            cout << TerminalProgressBar::render(100, "Sandbox Verification Successful", "Completed") << "\n\n";
 
             if (!assume_yes) {
-                cout << "Chroot test successful. Applying to host...\n";
-                cout << "Do you want to apply the transaction to the host system?\n";
-                cout << "This action cannot be undone without rollback if it fails.\n";
-                cout << "Type 'yes' to confirm or anything else to abort: ";
+                cout << "\033[1;32m✔\033[0m Sandbox verification passed without errors.\n";
+                cout << "The transaction is now ready to be applied to the host system.\n";
+                cout << "Do you wish to continue? Type 'yes' to confirm, or press Enter to abort: ";
                 string confirm;
                 getline(cin, confirm);
                 if (confirm != "yes" && confirm != "YES") {
@@ -1507,7 +1898,7 @@ void perform_transaction_argv(const vector<string>& transaction_argv, bool apply
         } else {
             if (have_pipe) { close(apt_pipe[0]); close(apt_pipe[1]); }
             if (have_err)  { close(err_pipe[0]); close(err_pipe[1]); }
-            cout << "Fork failed for chroot test.\n";
+            cout << "\033[1;31mE:\033[0m Unable to fork process for chroot verification.\n";
             return;
         }
     }
@@ -1516,30 +1907,85 @@ void perform_transaction_argv(const vector<string>& transaction_argv, bool apply
     bool snapshot_created = create_snapshot("apt-pre");
     global_config_backup.apply_new();
 
-    vector<char*> argv_ptrs;
-    argv_ptrs.reserve(transaction_argv.size() + 1);
-    for (const auto& a : transaction_argv) argv_ptrs.push_back(const_cast<char*>(a.c_str()));
-    argv_ptrs.push_back(nullptr);
+    cout.flush();
+    cerr.flush();
+
+    cout << "\033[1;36m==>\033[0m Applying transaction to the host system...\n";
+
+    int host_pipe[2];
+    bool have_host_pipe = (pipe(host_pipe) == 0);
 
     pid_t host_pid = fork();
     if (host_pid == 0) {
+        int devnull_r = open("/dev/null", O_RDONLY);
+        if (devnull_r >= 0) { dup2(devnull_r, STDIN_FILENO); close(devnull_r); }
+
+        int status_fd = -1;
+        if (have_host_pipe) {
+            close(host_pipe[0]);
+            if (host_pipe[1] != 3) { dup2(host_pipe[1], 3); close(host_pipe[1]); }
+            fcntl(3, F_SETFD, 0);
+            status_fd = 3;
+        }
+
+        for (int fd = 4; fd < 1024; ++fd) close(fd);
         setenv("DEBIAN_FRONTEND", "noninteractive", 1);
-        execvp(argv_ptrs[0], argv_ptrs.data());
-        _exit(127);
+        bool ok = run_libapt_transaction(action, targets, status_fd, false);
+        cout.flush();
+        cerr.flush();
+        _exit(ok ? 0 : 1);
     }
 
     int host_status = 0;
     bool host_ok = false;
     if (host_pid > 0) {
+        if (have_host_pipe) close(host_pipe[1]);
+
+        std::atomic<int> host_percent(-1);
+        ETAEstimator host_eta;
+
+        std::thread host_reader([&]() {
+            if (!have_host_pipe) return;
+            FILE* f = fdopen(host_pipe[0], "r");
+            if (!f) { close(host_pipe[0]); return; }
+            char line[512];
+            int last_shown = -1;
+            while (fgets(line, sizeof(line), f) != NULL) {
+                string s(line);
+                bool is_pm = (s.size() > 9 && s.substr(0, 9) == "pmstatus:");
+                bool is_dl = (!is_pm && s.size() > 9 && s.substr(0, 9) == "dlstatus:");
+                if (!is_pm && !is_dl) continue;
+                size_t c1 = s.find(':');
+                if (c1 == string::npos) continue;
+                size_t c2 = s.find(':', c1 + 1);
+                if (c2 == string::npos) continue;
+                size_t c3 = s.find(':', c2 + 1);
+                if (c3 == string::npos) continue;
+                string pct_str = s.substr(c2 + 1, c3 - c2 - 1);
+                try {
+                    int pct = static_cast<int>(stod(pct_str));
+                    if (pct > host_percent.load()) host_percent.store(pct);
+                    int current = host_percent.load();
+                    if (current != last_shown) {
+                        cout << TerminalProgressBar::render(current, "Applying to Host", host_eta.get_stats(current)) << flush;
+                        last_shown = current;
+                    }
+                } catch (...) {}
+            }
+            fclose(f);
+        });
+
         wait_for_child(host_pid, host_status);
+        if (have_host_pipe) host_reader.join();
         host_ok = WIFEXITED(host_status) && WEXITSTATUS(host_status) == 0;
     }
 
     if (host_ok) {
+        cout << TerminalProgressBar::render(100, "Transaction Applied Successfully", "Done") << "\n\n";
         create_snapshot("apt-post");
-        cout << "Transaction applied successfully.\n";
+        cout << "\033[1;32m✔\033[0m Transaction completed successfully.\n";
     } else {
-        cout << "Host transaction failed. Rolling back...\n";
+        cout << "\n\033[1;31mE:\033[0m Host transaction failed. Rolling back to previous snapshot...\n";
         global_config_backup.restore_orig();
         if (snapshot_created) do_rollback("apt-pre");
     }
@@ -1549,24 +1995,18 @@ void perform_transaction(const string& action, const vector<string>& pkgs, bool 
     PrecheckResult precheck = precheck_transaction(action, pkgs, false);
     if (precheck == PrecheckResult::Failed || precheck == PrecheckResult::NoChanges) return;
 
-    vector<string> argv = build_apt_argv(action, pkgs, false);
-    if (argv.empty()) { cout << "Invalid transaction request.\n"; return; }
-
-    perform_transaction_argv(argv, apply_host);
+    perform_transaction_argv(action, pkgs, apply_host);
 }
 
-void perform_install_transaction(const vector<string>& pkgs, bool apply_host) {
+void perform_install_transaction(const vector<string>& pkgs, bool apply_host, bool is_upgrade) {
     vector<InstallDecision> decisions;
-    if (!resolve_install_decisions(pkgs, decisions, false)) return;
+    if (!resolve_install_decisions(pkgs, decisions, false, is_upgrade)) return;
     if (decisions.empty()) return;
 
     vector<string> args;
     for (const auto& decision : decisions) args.push_back(decision.apt_argument);
 
-    vector<string> argv = build_apt_install_argv(args, false);
-    if (argv.empty()) { cout << "Invalid transaction request.\n"; return; }
-
-    perform_transaction_argv(argv, apply_host);
+    perform_transaction_argv("install", args, apply_host);
 }
 
 void perform_global_upgrade(bool apply_host) {
@@ -1658,8 +2098,7 @@ void perform_global_upgrade(bool apply_host) {
 
     if (!napt_upgrade_args.empty()) {
         cout << "Upgrading NAPT packages first...\n";
-        vector<string> napt_argv = build_apt_install_argv(napt_upgrade_args, false);
-        perform_transaction_argv(napt_argv, apply_host);
+        perform_transaction_argv("install", napt_upgrade_args, apply_host);
     }
 
     cout << "Proceeding with standard apt upgrade...\n";
@@ -1668,7 +2107,82 @@ void perform_global_upgrade(bool apply_host) {
 
 void perform_upgrade_transaction(const vector<string>& pkgs, bool apply_host) {
     if (pkgs.empty()) { perform_global_upgrade(apply_host); return; }
-    perform_install_transaction(pkgs, apply_host);
+    perform_install_transaction(pkgs, apply_host, true);
+}
+
+static string to_lower_copy(const string& s) {
+    string r = s;
+    transform(r.begin(), r.end(), r.begin(),
+              [](unsigned char c) { return static_cast<char>(tolower(c)); });
+    return r;
+}
+
+int run_search(const vector<string>& terms, int page) {
+    if (terms.empty()) { cout << "Usage: napt search <term> [-p <page>]\n"; return 1; }
+    if (page < 1) page = 1;
+    string term = to_lower_copy(terms[0]);
+    const int page_size = 30;
+    const int offset = (page - 1) * page_size;
+
+    pkgCacheFile cache_file;
+    pkgCache* cache = cache_file.GetPkgCache();
+    if (cache == nullptr) { _error->DumpErrors(); return 1; }
+
+    int matches = 0;
+    int shown = 0;
+    set<string> seen_names;
+
+    for (pkgCache::PkgIterator pkg = cache->PkgBegin(); !pkg.end(); ++pkg) {
+        string name = pkg.Name();
+        if (to_lower_copy(name).find(term) == string::npos) continue;
+        if (!seen_names.insert(name).second) continue;
+
+        int index = matches;
+        ++matches;
+        if (index < offset || shown >= page_size) continue;
+
+        pkgCache::VerIterator ver = pkg.VersionList();
+        string version = ver.end() ? "" : ver.VerStr();
+
+        cout << name;
+        if (!version.empty()) cout << " (" << version << ")";
+        cout << "\n";
+        ++shown;
+    }
+
+    vector<NaptRepoMetadata> repos = load_cached_napt_metadata();
+    for (const auto& repo : repos) {
+        for (const auto& entry : repo.packages) {
+            const string& pkg_name = entry.first;
+            if (to_lower_copy(pkg_name).find(term) == string::npos) continue;
+
+            int index = matches;
+            ++matches;
+            if (index < offset || shown >= page_size) continue;
+
+            string version = extract_napt_version(pkg_name, entry.second.first);
+            cout << pkg_name << " - Provided by Napt repository " << repo.base_url;
+            if (!version.empty()) cout << ", version " << version;
+            cout << ".\n";
+            ++shown;
+        }
+    }
+
+    if (matches == 0) {
+        cout << "No packages found matching \"" << terms[0] << "\".\n";
+        return 0;
+    }
+
+    if (shown == 0) {
+        cout << "Page " << page << " is empty. This search has " << matches << " results.\n";
+        return 0;
+    }
+
+    int total_pages = (matches + page_size - 1) / page_size;
+    cout << "Page " << page << " of " << total_pages << " (" << matches << " total results).";
+    if (page < total_pages) cout << " Use -p " << (page + 1) << " to see more.";
+    cout << "\n";
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -1678,14 +2192,17 @@ int main(int argc, char** argv) {
     string command;
     vector<string> pkgs;
     bool apply_host = false;
+    int search_page = 1;
 
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
         if (arg == "-h") { show_help(); return 0; }
-        else if (arg == "--v") { cout << "napt 2.0\n"; return 0; }
+        else if (arg == "--v") { cout << "napt 4.0\n"; return 0; }
         else if (arg == "--vb") { _config->Set("Debug::pkgAcquire", "true"); }
         else if (arg == "--apply-host") { apply_host = true; }
+        else if (arg == "--no-seccomp") { g_enable_seccomp = false; }
         else if (arg == "-y" || arg == "--yes" || arg == "--assume-yes") { assume_yes = true; }
+        else if (arg == "-p" && i + 1 < argc) { search_page = atoi(argv[++i]); }
         else if (command.empty() && arg[0] != '-') { command = arg; }
         else if (arg[0] != '-') { pkgs.push_back(arg); }
     }
@@ -1710,9 +2227,18 @@ int main(int argc, char** argv) {
     if (geteuid() != 0) { cout << "Root privileges required.\n"; return 1; }
 
     if (command == "sync") {
-        int apt_rc = exec_argv({"apt-get", "update"});
+        pkgCacheFile cache_file;
+        pkgSourceList* src_list = cache_file.GetSourceList();
+        bool apt_ok = false;
+        if (src_list != nullptr) {
+            NaptAcquireStatus status(-1, true, "metadata");
+            apt_ok = ListUpdate(status, *src_list);
+            if (!apt_ok) _error->DumpErrors();
+        } else {
+            _error->DumpErrors();
+        }
         bool napt_ok = sync_napt_metadata();
-        return (apt_rc == 0 && napt_ok) ? 0 : 1;
+        return (apt_ok && napt_ok) ? 0 : 1;
     } else if (command == "clean") {
         return clean_napt_cache() ? 0 : 1;
     } else if (command == "autoclean") {
@@ -1729,6 +2255,8 @@ int main(int argc, char** argv) {
         perform_upgrade_transaction(pkgs, apply_host);
     } else if (command == "remove" || command == "purge") {
         perform_transaction(command, pkgs, apply_host);
+    } else if (command == "search") {
+        return run_search(pkgs, search_page);
     } else {
         cout << "Unknown command: " << command << "\n";
         show_help();

@@ -43,6 +43,57 @@
 #include <apt-pkg/tagfile.h>
 #include <apt-pkg/update.h>
 #include <memory>
+#include <sys/prctl.h>
+#include <sys/syscall.h>
+#include <linux/seccomp.h>
+#include <linux/filter.h>
+#include <linux/audit.h>
+#include <stddef.h>
+
+#ifndef PR_SET_NO_NEW_PRIVS
+#define PR_SET_NO_NEW_PRIVS 38
+#endif
+
+#ifndef PR_SET_SECCOMP
+#define PR_SET_SECCOMP 22
+#endif
+
+#ifndef SECCOMP_MODE_FILTER
+#define SECCOMP_MODE_FILTER 2
+#endif
+
+#ifndef SECCOMP_RET_ERRNO
+#define SECCOMP_RET_ERRNO 0x05000000U
+#endif
+
+#ifndef SECCOMP_RET_ALLOW
+#define SECCOMP_RET_ALLOW 0x7fff0000U
+#endif
+
+#ifndef SECCOMP_RET_DATA
+#define SECCOMP_RET_DATA 0x0000ffffU
+#endif
+
+#ifndef AUDIT_ARCH_X86_64
+#define AUDIT_ARCH_X86_64 0xc000003e
+#endif
+
+#ifndef AUDIT_ARCH_AARCH64
+#define AUDIT_ARCH_AARCH64 0xc00000b7
+#endif
+
+#if defined(__x86_64__)
+#define SECCOMP_TARGET_ARCH AUDIT_ARCH_X86_64
+#elif defined(__aarch64__)
+#define SECCOMP_TARGET_ARCH AUDIT_ARCH_AARCH64
+#elif defined(__i386__)
+#define SECCOMP_TARGET_ARCH 0x40000003
+#elif defined(__arm__)
+#define SECCOMP_TARGET_ARCH 0x40000028
+#else
+#define SECCOMP_TARGET_ARCH 0
+#endif
+
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -57,7 +108,117 @@ const string NAPT_CACHE_DIR = "/etc/napt/cache";
 const string NAPT_ALLOWED_FILE = "/etc/napt/allowed";
 
 static bool assume_yes = false;
+static bool g_enable_seccomp = true;
 static std::atomic<bool> sandbox_created_and_mounted(false);
+
+class ChrootSeccompManager {
+public:
+    static bool apply_filter(string& err_out) {
+        if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+            err_out = "Failed to set PR_SET_NO_NEW_PRIVS: " + string(strerror(errno));
+            return false;
+        }
+
+        vector<sock_filter> filter;
+
+        filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t)offsetof(struct seccomp_data, arch)));
+
+#if SECCOMP_TARGET_ARCH != 0
+        filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, SECCOMP_TARGET_ARCH, 1, 0));
+        filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
+#endif
+
+        filter.push_back(BPF_STMT(BPF_LD | BPF_W | BPF_ABS, (uint32_t)offsetof(struct seccomp_data, nr)));
+
+        vector<int> blocked_syscalls;
+
+#ifdef __NR_reboot
+        blocked_syscalls.push_back(__NR_reboot);
+#endif
+#ifdef __NR_init_module
+        blocked_syscalls.push_back(__NR_init_module);
+#endif
+#ifdef __NR_delete_module
+        blocked_syscalls.push_back(__NR_delete_module);
+#endif
+#ifdef __NR_finit_module
+        blocked_syscalls.push_back(__NR_finit_module);
+#endif
+#ifdef __NR_kexec_load
+        blocked_syscalls.push_back(__NR_kexec_load);
+#endif
+#ifdef __NR_kexec_file_load
+        blocked_syscalls.push_back(__NR_kexec_file_load);
+#endif
+#ifdef __NR_swapon
+        blocked_syscalls.push_back(__NR_swapon);
+#endif
+#ifdef __NR_swapoff
+        blocked_syscalls.push_back(__NR_swapoff);
+#endif
+#ifdef __NR_acct
+        blocked_syscalls.push_back(__NR_acct);
+#endif
+#ifdef __NR_ptrace
+        blocked_syscalls.push_back(__NR_ptrace);
+#endif
+#ifdef __NR_bpf
+        blocked_syscalls.push_back(__NR_bpf);
+#endif
+#ifdef __NR_userfaultfd
+        blocked_syscalls.push_back(__NR_userfaultfd);
+#endif
+#ifdef __NR_syslog
+        blocked_syscalls.push_back(__NR_syslog);
+#endif
+#ifdef __NR_iopl
+        blocked_syscalls.push_back(__NR_iopl);
+#endif
+#ifdef __NR_ioperm
+        blocked_syscalls.push_back(__NR_ioperm);
+#endif
+#ifdef __NR_vmsplice
+        blocked_syscalls.push_back(__NR_vmsplice);
+#endif
+#ifdef __NR_add_key
+        blocked_syscalls.push_back(__NR_add_key);
+#endif
+#ifdef __NR_request_key
+        blocked_syscalls.push_back(__NR_request_key);
+#endif
+#ifdef __NR_keyctl
+        blocked_syscalls.push_back(__NR_keyctl);
+#endif
+#ifdef __NR_pivot_root
+        blocked_syscalls.push_back(__NR_pivot_root);
+#endif
+#ifdef __NR_clock_settime
+        blocked_syscalls.push_back(__NR_clock_settime);
+#endif
+#ifdef __NR_settimeofday
+        blocked_syscalls.push_back(__NR_settimeofday);
+#endif
+
+        for (int sys_nr : blocked_syscalls) {
+            filter.push_back(BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, (uint32_t)sys_nr, 0, 1));
+            filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (EPERM & SECCOMP_RET_DATA)));
+        }
+
+        filter.push_back(BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW));
+
+        struct sock_fprog prog;
+        prog.len = (unsigned short)filter.size();
+        prog.filter = filter.data();
+
+        if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) != 0) {
+            err_out = "Failed to load SECCOMP filter: " + string(strerror(errno));
+            return false;
+        }
+
+        return true;
+    }
+};
+
 
 bool read_text_file(const string& path, string& content);
 bool write_text_file(const string& path, const string& content);
@@ -154,7 +315,7 @@ bool nf_tree_available() {
 }
 
 void show_help() {
-    cout << "New Advanced Packaging Tool - napt 3.0\n\n"
+    cout << "New Advanced Packaging Tool - napt 4.0\n\n"
          << "Usage: napt [command] [options]\n\n"
          << "Commands:\n"
          << "  install          Install packages or local .deb files. Tested in a chroot before being applied to the host.\n"
@@ -168,6 +329,7 @@ void show_help() {
          << "  autoclean        Clear obsolete packages from the Napt download cache.\n\n"
          << "Options:\n"
          << "  --apply-host     Skip the chroot test and apply changes directly to the host.\n"
+         << "  --no-seccomp     Disable SECCOMP syscall filtering inside the chroot sandbox.\n"
          << "  -p <page>        Show a specific page of search results (used with search).\n"
          << "  --v              Show version information.\n"
          << "  --vb             Enable verbose logging for libapt transactions.\n"
@@ -1084,6 +1246,68 @@ string format_bytes(uint64_t bytes) {
     return string(buf);
 }
 
+class TerminalProgressBar {
+public:
+    static string render(int percentage, const string& action_label, const string& extra_stats = "", int bar_width = 22) {
+        if (percentage < 0) percentage = 0;
+        if (percentage > 100) percentage = 100;
+
+        int filled = (percentage * bar_width) / 100;
+        int empty = bar_width - filled;
+
+        string bar;
+        for (int i = 0; i < filled; ++i) bar += "\u2588";
+        for (int i = 0; i < empty; ++i)  bar += "\u2591";
+
+        string cyan_bold = "\033[1;36m";
+        string green = "\033[38;2;52;211;153m";
+        string gray = "\033[38;2;148;163;184m";
+        string reset = "\033[0m";
+
+        ostringstream oss;
+        char pct_buf[16];
+        snprintf(pct_buf, sizeof(pct_buf), "%3d%%", percentage);
+        oss << "\r " << cyan_bold << pct_buf << reset << " ["
+            << green << bar << reset << "] "
+            << action_label;
+        if (!extra_stats.empty()) {
+            oss << " " << gray << "(" << extra_stats << ")" << reset;
+        }
+        oss << "   ";
+        return oss.str();
+    }
+};
+
+class ETAEstimator {
+    chrono::steady_clock::time_point start_time;
+public:
+    ETAEstimator() : start_time(chrono::steady_clock::now()) {}
+
+    void reset() {
+        start_time = chrono::steady_clock::now();
+    }
+
+    string get_stats(int current_percent) {
+        if (current_percent <= 0) return "Calculating...";
+        auto now = chrono::steady_clock::now();
+        double elapsed_sec = chrono::duration_cast<chrono::duration<double>>(now - start_time).count();
+        if (elapsed_sec < 0.25) return "Estimating...";
+
+        double pct_per_sec = static_cast<double>(current_percent) / elapsed_sec;
+        if (pct_per_sec <= 0.001) return "Calculating...";
+
+        double remaining_pct = 100.0 - current_percent;
+        double remaining_sec = remaining_pct / pct_per_sec;
+
+        int mins = static_cast<int>(remaining_sec) / 60;
+        int secs = static_cast<int>(remaining_sec) % 60;
+
+        char buf[64];
+        snprintf(buf, sizeof(buf), "ETA: %02d:%02d", mins, secs);
+        return string(buf);
+    }
+};
+
 vector<NaptRepoMetadata> load_cached_napt_metadata();
 
 bool autoclean_napt_cache() {
@@ -1266,11 +1490,13 @@ static bool download_napt_packages(vector<PendingNaptDownload>& pending_napt_dow
 
                 auto& pending = pending_napt_downloads[idx];
                 if (!quiet) safe_log("Downloading Napt package: ", pending.pkg_name, "...\n");
-
+                auto start_time = chrono::steady_clock::now();
                 if (!cache_napt_package(pending.candidate, pending.local_path)) {
                     pending.error_msg = "E: Failed to download " + pending.pkg_name + " from the Napt repository.";
                     continue;
                 }
+                auto end_time = chrono::steady_clock::now();
+                double elapsed_sec = chrono::duration_cast<chrono::duration<double>>(end_time - start_time).count();
 
                 if (pending.candidate.sha256.empty()) {
                     pending.error_msg = "E: SHA256 checksum is missing in metadata for package " + pending.pkg_name + ".\nE: Refusing to install unverified package.";
@@ -1287,9 +1513,26 @@ static bool download_napt_packages(vector<PendingNaptDownload>& pending_napt_dow
 
                 error_code ec;
                 uint64_t file_sz = fs::file_size(pending.local_path, ec);
-                string sz_str = (!ec && file_sz > 0) ? (" [" + format_bytes(file_sz) + "]") : "";
+                string sz_str = (!ec && file_sz > 0) ? format_bytes(file_sz) : "";
+                string speed_str = "";
+                if (!ec && file_sz > 0 && elapsed_sec > 0.005) {
+                    double bytes_per_sec = static_cast<double>(file_sz) / elapsed_sec;
+                    speed_str = format_bytes(static_cast<uint64_t>(bytes_per_sec)) + "/s";
+                }
 
-                if (!quiet) safe_log("Downloaded ", pending.pkg_name, sz_str, " [OK]\n");
+                if (!quiet) {
+                    string checkmark = "\033[1;32m✔\033[0m";
+                    string cyan = "\033[1;36m";
+                    string gray = "\033[38;2;148;163;184m";
+                    string reset = "\033[0m";
+                    string details = "";
+                    if (!sz_str.empty()) details += sz_str;
+                    if (!speed_str.empty()) details += (details.empty() ? "" : " | ") + speed_str;
+
+                    safe_log(" ", checkmark, " ", cyan, pending.pkg_name, reset,
+                             (!details.empty() ? " " + gray + "(" + details + ")" + reset : ""),
+                             "\n");
+                }
                 pending.success = true;
             }
         });
@@ -1313,7 +1556,8 @@ static bool download_napt_packages(vector<PendingNaptDownload>& pending_napt_dow
             decisions.push_back(decision);
             if (!quiet) {
                 safe_log("Selected ", pending.pkg_name, 
-                         (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""), " from the Napt repository.\n");
+                         (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""),
+                         " from the Napt repository.\n");
             }
         }
     }
@@ -1511,6 +1755,17 @@ void perform_transaction_argv(const string& action, const vector<string>& target
                 _exit(1);
             }
 
+            if (g_enable_seccomp) {
+                string seccomp_err;
+                if (!ChrootSeccompManager::apply_filter(seccomp_err)) {
+                    if (have_err && !seccomp_err.empty()) {
+                        string msg = "W: SECCOMP filter notice: " + seccomp_err + "\n";
+                        ssize_t written = write(err_pipe[1], msg.c_str(), msg.size());
+                        (void)written;
+                    }
+                }
+            }
+
             int devnull_r = open("/dev/null", O_RDONLY);
             if (devnull_r >= 0) { dup2(devnull_r, STDIN_FILENO); close(devnull_r); }
 
@@ -1551,10 +1806,12 @@ void perform_transaction_argv(const string& action, const vector<string>& target
             if (have_pipe) close(apt_pipe[1]);
             if (have_err)  close(err_pipe[1]);
 
-            cout << "Verifying transaction in an isolated chroot environment...\n";
+            cout << "\033[1;36m==>\033[0m Verifying transaction in isolated sandbox"
+                 << (g_enable_seccomp ? " (SECCOMP BPF active)...\n" : "...\n");
 
             std::atomic<int> apt_percent(-1);
             string child_stderr_output;
+            ETAEstimator chroot_eta;
 
             std::thread stderr_reader([&]() {
                 if (!have_err) return;
@@ -1590,8 +1847,7 @@ void perform_transaction_argv(const string& action, const vector<string>& target
                         if (pct > apt_percent.load()) apt_percent.store(pct);
                         int current = apt_percent.load();
                         if (current != last_shown) {
-                            cout << "\rVerifying transaction in an isolated chroot environment: "
-                                 << current << "%   " << flush;
+                            cout << TerminalProgressBar::render(current, "Sandbox Verification", chroot_eta.get_stats(current)) << flush;
                             last_shown = current;
                         }
                     } catch (...) {}
@@ -1611,12 +1867,12 @@ void perform_transaction_argv(const string& action, const vector<string>& target
 
             if (!waited) {
                 global_config_backup.restore_orig();
-                cout << "\rE: Chroot verification interrupted.                        \n";
+                cout << "\n\033[1;31mE:\033[0m Chroot verification interrupted.\n";
                 return;
             }
             if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
                 global_config_backup.restore_orig();
-                cout << "\rE: Chroot verification failed.                             \n";
+                cout << "\n\033[1;31mE:\033[0m Chroot verification failed.\n";
                 if (!child_stderr_output.empty()) {
                     cout << "---- chroot error output ----\n" << child_stderr_output;
                     if (child_stderr_output.back() != '\n') cout << '\n';
@@ -1625,23 +1881,24 @@ void perform_transaction_argv(const string& action, const vector<string>& target
                 return;
             }
 
+            cout << TerminalProgressBar::render(100, "Sandbox Verification Successful", "Completed") << "\n\n";
+
             if (!assume_yes) {
-                cout << "\rChroot verification completed successfully.                \n";
-                cout << "The following transaction will now be applied to the host system.\n";
-                cout << "This operation is irreversible unless a rollback is performed.\n";
+                cout << "\033[1;32m✔\033[0m Sandbox verification passed without errors.\n";
+                cout << "The transaction is now ready to be applied to the host system.\n";
                 cout << "Do you wish to continue? Type 'yes' to confirm, or press Enter to abort: ";
                 string confirm;
                 getline(cin, confirm);
                 if (confirm != "yes" && confirm != "YES") {
                     global_config_backup.restore_orig();
-                    cout << "Transaction aborted.\n";
+                    cout << "Transaction aborted by user.\n";
                     return;
                 }
             }
         } else {
             if (have_pipe) { close(apt_pipe[0]); close(apt_pipe[1]); }
             if (have_err)  { close(err_pipe[0]); close(err_pipe[1]); }
-            cout << "E: Unable to fork process for chroot verification.\n";
+            cout << "\033[1;31mE:\033[0m Unable to fork process for chroot verification.\n";
             return;
         }
     }
@@ -1652,13 +1909,28 @@ void perform_transaction_argv(const string& action, const vector<string>& target
 
     cout.flush();
     cerr.flush();
+
+    cout << "\033[1;36m==>\033[0m Applying transaction to the host system...\n";
+
+    int host_pipe[2];
+    bool have_host_pipe = (pipe(host_pipe) == 0);
+
     pid_t host_pid = fork();
     if (host_pid == 0) {
         int devnull_r = open("/dev/null", O_RDONLY);
         if (devnull_r >= 0) { dup2(devnull_r, STDIN_FILENO); close(devnull_r); }
-        for (int fd = 3; fd < 1024; ++fd) close(fd);
+
+        int status_fd = -1;
+        if (have_host_pipe) {
+            close(host_pipe[0]);
+            if (host_pipe[1] != 3) { dup2(host_pipe[1], 3); close(host_pipe[1]); }
+            fcntl(3, F_SETFD, 0);
+            status_fd = 3;
+        }
+
+        for (int fd = 4; fd < 1024; ++fd) close(fd);
         setenv("DEBIAN_FRONTEND", "noninteractive", 1);
-        bool ok = run_libapt_transaction(action, targets, -1, false);
+        bool ok = run_libapt_transaction(action, targets, status_fd, false);
         cout.flush();
         cerr.flush();
         _exit(ok ? 0 : 1);
@@ -1667,15 +1939,53 @@ void perform_transaction_argv(const string& action, const vector<string>& target
     int host_status = 0;
     bool host_ok = false;
     if (host_pid > 0) {
+        if (have_host_pipe) close(host_pipe[1]);
+
+        std::atomic<int> host_percent(-1);
+        ETAEstimator host_eta;
+
+        std::thread host_reader([&]() {
+            if (!have_host_pipe) return;
+            FILE* f = fdopen(host_pipe[0], "r");
+            if (!f) { close(host_pipe[0]); return; }
+            char line[512];
+            int last_shown = -1;
+            while (fgets(line, sizeof(line), f) != NULL) {
+                string s(line);
+                bool is_pm = (s.size() > 9 && s.substr(0, 9) == "pmstatus:");
+                bool is_dl = (!is_pm && s.size() > 9 && s.substr(0, 9) == "dlstatus:");
+                if (!is_pm && !is_dl) continue;
+                size_t c1 = s.find(':');
+                if (c1 == string::npos) continue;
+                size_t c2 = s.find(':', c1 + 1);
+                if (c2 == string::npos) continue;
+                size_t c3 = s.find(':', c2 + 1);
+                if (c3 == string::npos) continue;
+                string pct_str = s.substr(c2 + 1, c3 - c2 - 1);
+                try {
+                    int pct = static_cast<int>(stod(pct_str));
+                    if (pct > host_percent.load()) host_percent.store(pct);
+                    int current = host_percent.load();
+                    if (current != last_shown) {
+                        cout << TerminalProgressBar::render(current, "Applying to Host", host_eta.get_stats(current)) << flush;
+                        last_shown = current;
+                    }
+                } catch (...) {}
+            }
+            fclose(f);
+        });
+
         wait_for_child(host_pid, host_status);
+        if (have_host_pipe) host_reader.join();
         host_ok = WIFEXITED(host_status) && WEXITSTATUS(host_status) == 0;
     }
 
     if (host_ok) {
+        cout << TerminalProgressBar::render(100, "Transaction Applied Successfully", "Done") << "\n\n";
         create_snapshot("apt-post");
-        cout << "Transaction completed successfully.\n";
+        cout << "\033[1;32m✔\033[0m Transaction completed successfully.\n";
     } else {
-        cout << "E: Host transaction failed. Rolling back to the previous snapshot...\n";
+        cout << "\n\033[1;31mE:\033[0m Host transaction failed. Rolling back to previous snapshot...\n";
         global_config_backup.restore_orig();
         if (snapshot_created) do_rollback("apt-pre");
     }
@@ -1887,9 +2197,10 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
         if (arg == "-h") { show_help(); return 0; }
-        else if (arg == "--v") { cout << "napt 3.0\n"; return 0; }
+        else if (arg == "--v") { cout << "napt 4.0\n"; return 0; }
         else if (arg == "--vb") { _config->Set("Debug::pkgAcquire", "true"); }
         else if (arg == "--apply-host") { apply_host = true; }
+        else if (arg == "--no-seccomp") { g_enable_seccomp = false; }
         else if (arg == "-y" || arg == "--yes" || arg == "--assume-yes") { assume_yes = true; }
         else if (arg == "-p" && i + 1 < argc) { search_page = atoi(argv[++i]); }
         else if (command.empty() && arg[0] != '-') { command = arg; }

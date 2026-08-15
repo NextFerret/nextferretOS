@@ -15,12 +15,13 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QComboBox,
                              QLineEdit, QCheckBox, QStackedWidget, QMessageBox,
                              QTextEdit, QListWidget, QListWidgetItem, QFrame,
-                             QGraphicsDropShadowEffect, QProgressBar, QListView)
-from PyQt6.QtGui import QIcon, QPixmap, QColor
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
+                             QGraphicsDropShadowEffect, QProgressBar, QListView,
+                             QGridLayout, QScrollArea)
+from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent, QTimer, QByteArray
+from PyQt6.QtSvg import QSvgRenderer
 
 class _ComboFixer:
-    """Monkey-patches the popup container to remove the native dark frame."""
     def fix(self, combo):
         combo.view().window().setWindowFlags(
             Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint
@@ -35,7 +36,8 @@ FILES = [
     "/usr/bin/apt-nf-tree",
     "/etc/napt/sources.list",
     "/usr/bin/nlc",
-    "/usr/bin/nsmd_start"
+    "/usr/bin/nsmd_start",
+    "/etc/nextferretinst/translations.json"
 ]
 
 STYLES = """
@@ -56,9 +58,10 @@ QPushButton:hover{background:#f8faff;border-color:#4a78ff;}
 QPushButton[primary="true"]{background:#4a78ff;color:#fff;border:none;}
 QPushButton[primary="true"]:hover{background:#3868ef;}
 
-QLineEdit,QComboBox{background:#fff;border:1px solid #d9e1eb;border-radius:12px;padding:12px;color:#243042;selection-background-color:#4a78ff;}
-QLineEdit:focus,QComboBox:focus{border:1px solid #4a78ff;background:#fbfcff;}
-QComboBox::drop-down{border:none;width:24px;}
+QLineEdit,QComboBox{background:#fff;border:1px solid #d9e1eb;border-radius:12px;padding:0 14px;min-height:42px;max-height:44px;color:#243042;selection-background-color:#4a78ff;font-size:14px;}
+QLineEdit:focus,QComboBox:focus{border:1.5px solid #4a78ff;background:#fbfcff;}
+QComboBox::drop-down{subcontrol-origin:padding;subcontrol-position:center right;width:32px;border:none;}
+QComboBox::down-arrow{image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMiIgaGVpZ2h0PSIxMiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM2NDc0OGIiIHN0cm9rZS13aWR0aD0iMi41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik02IDlsNiA2IDYtNiIvPjwvc3ZnPg==");width:12px;height:12px;margin-right:10px;}
 QComboBox QAbstractItemView{background-color:#ffffff;border:1px solid #d9e1eb;border-radius:10px;padding:6px;color:#243042;selection-background-color:#4a78ff;selection-color:#ffffff;outline:none;}
 QComboBox QAbstractItemView::item{min-height:36px;padding:6px 12px;border-radius:6px;color:#243042;}
 QComboBox QAbstractItemView::item:hover{background-color:#f0f5ff;color:#4a78ff;}
@@ -77,108 +80,59 @@ QTextEdit[log="true"]{background:#131d2d;color:#68d391;border:none;border-radius
 
 QProgressBar{background:#e4eaf2;border:none;border-radius:6px;height:12px;text-align:center;}
 QProgressBar::chunk{border-radius:6px;background:#4a78ff;}
+
+QMessageBox{background-color:#ffffff;border:1px solid #d9e1eb;border-radius:16px;}
+QMessageBox QLabel{color:#1e293b;font-size:14px;font-weight:500;}
+QMessageBox QPushButton{background:#4a78ff;color:#ffffff;border:none;border-radius:10px;padding:8px 22px;font-size:13px;font-weight:600;min-width:70px;}
+QMessageBox QPushButton:hover{background:#3868ef;}
+
+QScrollArea{border:none;background:transparent;}
+
+QScrollBar:vertical{background:transparent;width:6px;margin:0;}
+QScrollBar::handle:vertical{background:#cbd5e1;min-height:25px;border-radius:3px;}
+QScrollBar::handle:vertical:hover{background:#94a3b8;}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical,QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:none;border:none;height:0;}
+
+QCheckBox{font-size:13px;color:#334155;spacing:10px;padding:4px 0;}
+QCheckBox::indicator{width:18px;height:18px;border-radius:5px;border:1.5px solid #cbd5e1;background-color:#ffffff;}
+QCheckBox::indicator:hover{border-color:#4a78ff;background-color:#f8faff;}
+QCheckBox::indicator:checked{border-color:#4a78ff;background-color:#4a78ff;image:url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMiIgaGVpZ2h0PSIxMiIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjQiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBvbHlsaW5lIHBvaW50cz0iMjAgNiA5IDE3IDQgMTIiLz48L3N2Zz4="); }
 """
 
-ARVOR_LOGO_PNG_B64 = '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'
+ARVOR_LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Top Tier -->
+  <polygon points="50,6 70,34 50,26 30,34" fill="#ffffff" />
+  <!-- Middle Tier -->
+  <polygon points="50,26 82,60 50,52 18,60" fill="#ffffff" />
+  <!-- Bottom Tier -->
+  <polygon points="50,52 94,84 50,76 6,84" fill="#ffffff" />
+  <!-- Trunk -->
+  <polygon points="41,78 59,78 61,98 39,98" fill="#ffffff" />
+</svg>"""
 
-TEXT = {
-    "en": {
-        "title": "Arvor Linux Installer", "step_welcome": "Welcome", "step_location": "Location", "step_keyboard": "Keyboard",
-        "step_desktop": "Software", "step_partitions": "Disk Setup", "step_users": "User Account", "step_summary": "Summary",
-        "step_install": "Installing", "step_finish": "Complete", "next": "Next Step", "back": "Previous", "install": "Install System",
-        "quit": "Reboot System", "welcome_msg": "Welcome to Arvor Linux", "welcome_sub": "Follow the steps to configure and install your new operating system.",
-        "locale": "System Language", "tz": "Timezone", "keymap": "Keyboard Layout", "de": "Desktop Environment", "disk": "Target Drive",
-        "luks": "Enable Disk Encryption (LUKS)", "luks_p": "Encryption Password", "host": "Computer Name", "user_name": "Username (no spaces)",
-        "pass": "Password", "pass_c": "Confirm Password", "err_pass": "Passwords do not match or are empty.", "err_disk": "Please select a target disk.",
-        "err_user": "Username and Hostname are required.", "summary_title": "Installation Summary", "summary_warn": "Warning: All data on the selected drive will be permanently erased.",
-        "finish_msg": "Installation Complete", "finish_sub": "Arvor Linux has been successfully installed. Remove the media and reboot.",
-        "warn_vm": "Virtual Machine Detected", "warn_power": "Running on Battery", "net_err": "No Internet Connection detected. Installation requires an active connection.",
-        "lbl_key_test": "Keyboard Test", "test_keymap": "Type here to test your keyboard layout...",
-        "lbl_disk_layout": "Partition Layout Preview", "lbl_pass_strength": "Password Strength",
-        "weak": "Weak", "medium": "Medium", "strong": "Strong",
-        "err_user_format": "Username must start with a lowercase letter (a-z) and contain only a-z, 0-9, _ or -"
-    },
-    "pt": {
-        "title": "Instalador Arvor Linux", "step_welcome": "Bem-vindo", "step_location": "Localização", "step_keyboard": "Teclado",
-        "step_desktop": "Software", "step_partitions": "Disco", "step_users": "Usuário", "step_summary": "Resumo",
-        "step_install": "Instalando", "step_finish": "Concluído", "next": "Próximo", "back": "Voltar", "install": "Instalar",
-        "quit": "Reiniciar", "welcome_msg": "Bem-vindo ao Arvor Linux", "welcome_sub": "Siga os passos para configurar e instalar seu novo sistema.",
-        "locale": "Idioma", "tz": "Fuso Horário", "keymap": "Layout", "de": "Ambiente Gráfico", "disk": "Disco de Destino",
-        "luks": "Criptografia de Disco (LUKS)", "luks_p": "Senha da Criptografia", "host": "Nome do Computador", "user_name": "Nome de usuário (sem espaços)",
-        "pass": "Senha", "pass_c": "Confirmar Senha", "err_pass": "Senhas não conferem.", "err_disk": "Selecione um disco.",
-        "err_user": "Nome de usuário e hostname são obrigatórios.", "summary_title": "Resumo da Instalacão", "summary_warn": "Aviso: Todos os dados no disco selecionado serão apagados.",
-        "finish_msg": "Instalação Concluída", "finish_sub": "O Arvor Linux foi instalado com sucesso. Remova a mídia e reinicie.",
-        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Rodando na Bateria", "net_err": "Sem conexão com a Internet. A instalação requer rede ativa.",
-        "lbl_key_test": "Teste do Teclado", "test_keymap": "Digite aqui para testar o layout do teclado...",
-        "lbl_disk_layout": "Pré-visualização do Layout do Disco", "lbl_pass_strength": "Força da Senha",
-        "weak": "Fraca", "medium": "Média", "strong": "Forte",
-        "err_user_format": "Nome de usuário deve começar com letra minúscula (a-z) e conter apenas a-z, 0-9, _ ou -"
-    },
-    "es": {
-        "title": "Instalador Arvor Linux", "step_welcome": "Bienvenido", "step_location": "Ubicación", "step_keyboard": "Teclado",
-        "step_desktop": "Software", "step_partitions": "Disco", "step_users": "Usuario", "step_summary": "Resumen",
-        "step_install": "Instalando", "step_finish": "Completado", "next": "Siguiente", "back": "Atrás", "install": "Instalar",
-        "quit": "Reiniciar", "welcome_msg": "Bienvenido a Arvor Linux", "welcome_sub": "Siga los pasos para configurar e instalar su nuevo sistema.",
-        "locale": "Idioma", "tz": "Zona Horaria", "keymap": "Distribución de Teclado", "de": "Entorno de Escritorio", "disk": "Disco de Destino",
-        "luks": "Cifrado de Disco (LUKS)", "luks_p": "Contraseña de Cifrado", "host": "Nombre del Equipo", "user_name": "Nombre de usuario (sin espacios)",
-        "pass": "Contraseña", "pass_c": "Confirmar Contraseña", "err_pass": "Las contraseñas no coinciden.", "err_disk": "Seleccione un disco.",
-        "err_user": "Nombre de usuario y hostname son obligatorios.", "summary_title": "Resumen de Instalación", "summary_warn": "Aviso: Todos los datos en el disco seleccionado serán eliminados.",
-        "finish_msg": "Instalación Completada", "finish_sub": "Arvor Linux se instaló correctamente. Retire el medio y reinicie.",
-        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Ejecutando con Batería", "net_err": "No se detectó conexión a Internet.",
-        "lbl_key_test": "Prueba de Teclado", "test_keymap": "Escriba aquí para probar la distribución de teclado...",
-        "lbl_disk_layout": "Vista previa de particiones", "lbl_pass_strength": "Fortaleza de la contraseña",
-        "weak": "Débil", "medium": "Media", "strong": "Fuerte",
-        "err_user_format": "El usuario debe empezar con minúscula (a-z) y contener solo a-z, 0-9, _ o -"
-    },
-    "fr": {
-        "title": "Programme d'installation Arvor Linux", "step_welcome": "Bienvenue", "step_location": "Emplacement", "step_keyboard": "Clavier",
-        "step_desktop": "Logiciel", "step_partitions": "Disque", "step_users": "Utilisateur", "step_summary": "Résumé",
-        "step_install": "Installation", "step_finish": "Terminé", "next": "Suivant", "back": "Retour", "install": "Installer",
-        "quit": "Redémarrer", "welcome_msg": "Bienvenue sur Arvor Linux", "welcome_sub": "Suivez les étapes pour configurer et installer votre système.",
-        "locale": "Langue", "tz": "Fuseau Horaire", "keymap": "Disposition du Clavier", "de": "Environnement de Bureau", "disk": "Disque Cible",
-        "luks": "Chiffrement du Disque (LUKS)", "luks_p": "Mot de passe de Chiffrement", "host": "Nom de l'Ordinateur", "user_name": "Nom d'utilisateur (sans espaces)",
-        "pass": "Mot de passe", "pass_c": "Confirmer le mot de passe", "err_pass": "Les mots de passe ne correspondent pas.", "err_disk": "Veuillez sélectionner un disque.",
-        "err_user": "Nom d'utilisateur et hostname requis.", "summary_title": "Résumé de l'installation", "summary_warn": "Avertissement : Toutes les données sur le disque seront effacées.",
-        "finish_msg": "Installation Terminée", "finish_sub": "Arvor Linux a été installé. Retirez le support et redémarrez.",
-        "warn_vm": "Machine Virtuelle Détectée", "warn_power": "Fonctionnement sur Batterie", "net_err": "Pas de connexion Internet.",
-        "lbl_key_test": "Test du Clavier", "test_keymap": "Tapez ici pour tester la disposition de votre clavier...",
-        "lbl_disk_layout": "Aperçu de la disposition des partitions", "lbl_pass_strength": "Force du mot de passe",
-        "weak": "Faible", "medium": "Moyen", "strong": "Fort",
-        "err_user_format": "Le nom d'utilisateur doit commencer par une lettre minuscule (a-z)"
-    },
-    "de": {
-        "title": "Arvor Linux Installationsprogramm", "step_welcome": "Willkommen", "step_location": "Standort", "step_keyboard": "Tastatur",
-        "step_desktop": "Software", "step_partitions": "Festplatte", "step_users": "Benutzer", "step_summary": "Zusammenfassung",
-        "step_install": "Installieren", "step_finish": "Abgeschlossen", "next": "Weiter", "back": "Zurück", "install": "Installieren",
-        "quit": "Neustart", "welcome_msg": "Willkommen bei Arvor Linux", "welcome_sub": "Folgen Sie den Schritten zur Konfiguration und Installation.",
-        "locale": "Sprache", "tz": "Zeitzone", "keymap": "Tastaturlayout", "de": "Desktop-Umgebung", "disk": "Ziellaufwerk",
-        "luks": "Festplattenverschlüsselung (LUKS)", "luks_p": "Verschlüsselungspasswort", "host": "Computername", "user_name": "Benutzername (keine Leerzeichen)",
-        "pass": "Passwort", "pass_c": "Passwort bestätigen", "err_pass": "Passwörter stimmen nicht überein.", "err_disk": "Bitte wählen Sie eine Festplatte aus.",
-        "err_user": "Benutzername und Hostname sind erforderlich.", "summary_title": "Zusammenfassung", "summary_warn": "Warnung: Alle Daten auf der ausgewählten Festplatte werden gelöscht.",
-        "finish_msg": "Installation Abgeschlossen", "finish_sub": "Arvor Linux wurde erfolgreich installiert. Entfernen Sie das Medium und starten Sie neu.",
-        "warn_vm": "Virtuelle Maschine Erkannt", "warn_power": "Akkubetrieb Erkannt", "net_err": "Keine Internetverbindung erkannt.",
-        "lbl_key_test": "Tastaturtest", "test_keymap": "Hier tippen, um das Tastaturlayout zu testen...",
-        "lbl_disk_layout": "Vorschau der Partitionierung", "lbl_pass_strength": "Passwortstärke",
-        "weak": "Schwach", "medium": "Mittel", "strong": "Stark",
-        "err_user_format": "Benutzername muss mit Kleinbuchstaben (a-z) beginnen"
-    },
-    "gl": {
-        "title": "Instalador Arvor Linux", "step_welcome": "Benvido", "step_location": "Localización", "step_keyboard": "Teclado",
-        "step_desktop": "Software", "step_partitions": "Configuración do Disco", "step_users": "Conta de Usuario", "step_summary": "Resumo",
-        "step_install": "Instalando", "step_finish": "Completado", "next": "Seguinte", "back": "Atrás", "install": "Instalar",
-        "quit": "Reiniciar", "welcome_msg": "Benvido a Arvor Linux", "welcome_sub": "Siga os pasos para configurar e instalar o seu novo sistema.",
-        "locale": "Idioma do Sistema", "tz": "Fuso Horario", "keymap": "Distribución do Teclado", "de": "Entorno de Escritorio", "disk": "Unidade de Destino",
-        "luks": "Activar Cifrado de Disco (LUKS)", "luks_p": "Contrasinal de Cifrado", "host": "Nome do Computador", "user_name": "Nome de usuario (sen espazos)",
-        "pass": "Contrasinal", "pass_c": "Confirmar Contrasinal", "err_pass": "Os contrasinais non coinciden.", "err_disk": "Seleccione unha unidade.",
-        "err_user": "Nome de usuario e hostname son obrigatorios.", "summary_title": "Resumo da Instalación", "summary_warn": "Aviso: Todos os datos na unidade seleccionada serán eliminados.",
-        "finish_msg": "Instalaación Completada", "finish_sub": "Arvor Linux instalouse correctamente. Retire o medio e reinicie.",
-        "warn_vm": "Máquina Virtual Detectada", "warn_power": "Executando con Batería", "net_err": "Non se detectou conexión a Internet.",
-        "lbl_key_test": "Praba do Teclado", "test_keymap": "Escriba aquí para probar a súa distribución de teclado...",
-        "lbl_disk_layout": "Vista previa de particións", "lbl_pass_strength": "Fortaleza do contrasinal",
-        "weak": "Débil", "medium": "Media", "strong": "Forte",
-        "err_user_format": "O usuario debe comezar con minúscula (a-z) e conter só a-z, 0-9, _ ou -"
-    }
-}
+TRANSLATIONS_FILE = "/etc/nextferretinst/translations.json"
+
+def load_translations():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        TRANSLATIONS_FILE,
+        os.path.normpath(os.path.join(script_dir, "..", "..", "etc", "nextferretinst", "translations.json")),
+        os.path.normpath(os.path.join(script_dir, "..", "etc", "nextferretinst", "translations.json")),
+        os.path.join(os.getcwd(), "etc", "nextferretinst", "translations.json"),
+        os.path.join("etc", "nextferretinst", "translations.json")
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and "en" in data:
+                        return data
+            except Exception:
+                pass
+    return {"en": {"title": "Arvor Linux Installer"}}
+
+TEXT = load_translations()
 
 class NetUtils:
     @staticmethod
@@ -226,7 +180,12 @@ class Sys:
 
     @staticmethod
     def list_disks():
-        if SIMULATE: return [{"name": "sda", "size": "500G", "model": "VBOX HARDDISK", "type": "disk"}]
+        if SIMULATE:
+            return [
+                {"name": "sda", "size": "500G", "model": "NVMe Samsung SSD 980 PRO", "type": "disk"},
+                {"name": "sdb", "size": "1000G", "model": "SATA Crucial MX500 SSD", "type": "disk"},
+                {"name": "sdc", "size": "2000G", "model": "Seagate Barracuda HDD", "type": "disk"}
+            ]
         o = Sys.run("lsblk -d -n -o NAME,SIZE,MODEL,TYPE -J", check=False)
         if o:
             try: return [d for d in json.loads(o)['blockdevices'] if d['type'] == 'disk']
@@ -274,6 +233,61 @@ class Sys:
                     with open(status_path, 'r') as f:
                         if f.read().strip() == "Discharging": return True
         return False
+
+    @staticmethod
+    def detect_system_defaults():
+        lang_idx = 0
+        detected_locale = "en_US.UTF-8"
+        detected_keymap = "us"
+        detected_tz = "UTC"
+
+        env_lang = os.environ.get("LANG", "") or os.environ.get("LC_ALL", "")
+        if not env_lang and os.path.exists("/etc/default/locale"):
+            try:
+                with open("/etc/default/locale", "r") as f:
+                    for line in f:
+                        if line.startswith("LANG="):
+                            env_lang = line.split("=", 1)[1].strip().strip('"').strip("'")
+                            break
+            except Exception:
+                pass
+
+        if env_lang:
+            detected_locale = env_lang
+            low = env_lang.lower()
+            if low.startswith("pt"): lang_idx = 1
+            elif low.startswith("es"): lang_idx = 2
+            elif low.startswith("fr"): lang_idx = 3
+            elif low.startswith("de"): lang_idx = 4
+            elif low.startswith("gl"): lang_idx = 5
+            else: lang_idx = 0
+
+        xkb = Sys.run("localectl status", check=False)
+        if xkb:
+            for line in xkb.split("\n"):
+                if "X11 Layout:" in line:
+                    detected_keymap = line.split(":", 1)[1].strip().split(",")[0].strip()
+                    break
+        if detected_keymap == "us":
+            q = Sys.run("setxkbmap -query", check=False)
+            if q:
+                for line in q.split("\n"):
+                    if line.startswith("layout:"):
+                        detected_keymap = line.split(":", 1)[1].strip().split(",")[0].strip()
+                        break
+
+        tz = Sys.run("timedatectl show -p Timezone --value", check=False)
+        if tz and tz.strip():
+            detected_tz = tz.strip()
+        elif os.path.islink("/etc/localtime"):
+            try:
+                target = os.readlink("/etc/localtime")
+                if "zoneinfo/" in target:
+                    detected_tz = target.split("zoneinfo/", 1)[1]
+            except Exception:
+                pass
+
+        return lang_idx, detected_locale, detected_keymap, detected_tz
 
 class InstallWorker(QThread):
     log_msg = pyqtSignal(str)
@@ -458,8 +472,9 @@ class InstallWorker(QThread):
                 if os.path.islink(osf): os.symlink(os.readlink(osf), dst)
                 else: shutil.copy2(osf, dst)
 
-        luks_sh = f"echo '{self.mapper} {f_p3} none luks,discard,initramfs' > /etc/crypttab\napt-get install -y cryptsetup-initramfs\n" if self.conf["luks"] else ""
-        de_sh = f"apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold {self.conf['de_pkgs']}\n" if self.conf["de_pkgs"] else ""
+        extra_pkgs = self.conf.get("extra_pkgs", "")
+        all_pkgs = f"{self.conf['de_pkgs']} {extra_pkgs}".strip()
+        de_sh = f"apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold {all_pkgs}\n" if all_pkgs else ""
 
         creds_path = os.path.join(self.mount, "tmp", ".creds")
         try:
@@ -479,6 +494,43 @@ cat << EOF > /etc/fstab
 {f_efi}  /boot/efi       vfat    defaults        0       1
 EOF
 """
+
+        swap_mode = self.conf.get("swap_mode", "zram")
+        swap_sh = ""
+        if swap_mode == "zram":
+            swap_sh = """
+apt-get install -y --no-install-recommends zram-tools
+cat << 'ZRAM_EOF' > /etc/default/zramswap
+PERCENT=50
+ALGO=zstd
+PRIORITY=100
+ZRAM_EOF
+systemctl enable zramswap || true
+"""
+        elif swap_mode.startswith("file_"):
+            if swap_mode == "file_2g": swap_mb = 2048
+            elif swap_mode == "file_4g": swap_mb = 4096
+            elif swap_mode == "file_8g": swap_mb = 8192
+            elif swap_mode == "file_auto":
+                detected_ram_mb = 4096
+                try:
+                    with open("/proc/meminfo", "r") as f:
+                        for line in f:
+                            if "MemTotal" in line:
+                                detected_ram_mb = int(line.split()[1]) // 1024
+                                break
+                except Exception: pass
+                swap_mb = min(max(2048, detected_ram_mb), 8192)
+            else:
+                swap_mb = 2048
+
+            swap_sh = f"""
+fallocate -l {swap_mb}M /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count={swap_mb}
+chmod 600 /swapfile
+mkswap /swapfile
+echo "/swapfile none swap sw 0 0" >> /etc/fstab
+"""
+
 
         script = f"""#!/bin/bash
 set -e
@@ -535,16 +587,16 @@ systemctl enable NetworkManager
 {luks_sh}
 
 userdel -r live 2>/dev/null || true
-useradd -m -s /bin/bash -G sudo {self.conf['user']}
+clean_display_name="{self.conf.get('display_name', self.conf['user'])}"
+useradd -m -s /bin/bash -c "$clean_display_name" -G sudo {self.conf['user']}
 chpasswd < /tmp/.creds
 shred -u /tmp/.creds 2>/dev/null || rm -f /tmp/.creds
 echo "{self.conf['hostname']}" > /etc/hostname
-echo "127.0.0.1    localhost" > /etc/hosts
-echo "::1          localhost ip6-localhost ip6-loopback" >> /etc/hosts
 echo "127.0.1.1    {self.conf['hostname']}" >> /etc/hosts
 
 {de_sh}
 {fstab_sh}
+{swap_sh}
 
 if [ -d "/usr/share/plymouth/themes/blockchain" ]; then
     plymouth-set-default-theme blockchain || true
@@ -586,8 +638,6 @@ grep -q "rd.lvm.lv" /etc/default/grub || echo 'GRUB_CMDLINE_LINUX="rd.lvm.lv=arv
 rm -rf /etc/motd
 
 update-initramfs -c -k all || update-initramfs -u
-
-update-initramfs -c -k all || update-initramfs -u
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=arvor-linux || true
 efibootmgr -c -d {self.conf["disk"]} -p 1 -L "Arvor Linux" -l "\\EFI\\arvor-linux\\grubx64.efi" || true
 update-grub || true
@@ -620,33 +670,55 @@ exit 0
 class InstallerGUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.ui_lang = "en"
-        self.sys_locale = "en_US.UTF-8"
-        self.conf = {
-            "hostname": "arvor", "disk": None, "user": "", "pass": "",
-            "luks": False, "luks_pass": "", "keymap": "us", "timezone": "UTC",
-            "de_name": "None", "de_pkgs": ""
+        self.swap_modes = [
+            ("zram", "swap_zram"),
+            ("file_2g", "swap_file_2g"),
+            ("file_4g", "swap_file_4g"),
+            ("file_8g", "swap_file_8g"),
+            ("file_auto", "swap_auto"),
+            ("none", "swap_none")
+        ]
+
+        self.list_of_locales = Sys.list_locales()
+        self.list_of_keymaps = Sys.list_keymaps()
+        self.list_of_timezones = Sys.list_timezones()
+
+        auto_lang_idx, auto_locale, auto_keymap, auto_tz = Sys.detect_system_defaults()
+        self.initial_lang_idx = auto_lang_idx
+
+        self.lang_map = {
+            0: ("en", "en_US.UTF-8", "us", "UTC"),
+            1: ("pt", "pt_BR.UTF-8", "br", "America/Sao_Paulo"),
+            2: ("es", "es_ES.UTF-8", "es", "Europe/Madrid"),
+            3: ("fr", "fr_FR.UTF-8", "fr", "Europe/Paris"),
+            4: ("de", "de_DE.UTF-8", "de", "Europe/Berlin"),
+            5: ("gl", "gl_ES.UTF-8", "gl", "Europe/Madrid")
         }
+
+        lang, default_loc, default_keymap, default_tz = self.lang_map.get(auto_lang_idx, self.lang_map[0])
+        self.ui_lang = lang
+        self.sys_locale = auto_locale if auto_locale in self.list_of_locales else default_loc
+
+        self.conf = {
+            "hostname": "arvor", "disk": None, "display_name": "", "user": "", "pass": "",
+            "luks": False, "luks_pass": "",
+            "keymap": auto_keymap if auto_keymap in self.list_of_keymaps else default_keymap,
+            "timezone": auto_tz if auto_tz in self.list_of_timezones else default_tz,
+            "de_name": "None", "de_pkgs": "", "extra_pkgs": "",
+            "swap_mode": "zram"
+        }
+        self.user_manually_edited = False
         self.desktops = [
             ("None (CLI)", ""), ("XFCE", "xfce4 xfce4-goodies lightdm"), ("GNOME", "gnome-core gdm3"),
             ("KDE Plasma", "kde-standard sddm"), ("Cinnamon", "cinnamon-core lightdm"),
             ("MATE", "mate-desktop-environment lightdm"), ("LXQt", "lxqt-core sddm")
         ]
-        self.lang_map = {
-            0: ("en", "en_US.UTF-8", "us", "UTC"), 1: ("pt", "pt_BR.UTF-8", "br", "America/Sao_Paulo"),
-            2: ("es", "es_ES.UTF-8", "es", "Europe/Madrid"), 3: ("fr", "fr_FR.UTF-8", "fr", "Europe/Paris"),
-            4: ("de", "de_DE.UTF-8", "de", "Europe/Berlin"), 5: ("gl", "gl_ES.UTF-8", "gl", "Europe/Madrid")
-        }
-
-        self.list_of_locales = Sys.list_locales()
-        self.list_of_keymaps = Sys.list_keymaps()
-        self.list_of_timezones = Sys.list_timezones()
         self.icon_cache = {}
         self.sidebar_icon_cache = {}
 
         self.steps = ["step_welcome", "step_location", "step_keyboard", "step_desktop",
-                      "step_partitions", "step_users", "step_summary", "step_install", "step_finish"]
-        self.step_keys = ["welcome", "location", "keyboard", "software", "disk", "users", "summary", "install", "finish"]
+                      "step_zram", "step_partitions", "step_users", "step_summary", "step_install", "step_finish"]
+        self.step_keys = ["welcome", "location", "keyboard", "software", "zram", "disk", "users", "summary", "install", "finish"]
 
         self.preload_icons()
         self.init_ui()
@@ -655,7 +727,7 @@ class InstallerGUI(QMainWindow):
         return TEXT[self.ui_lang].get(key, key)
 
     def preload_icons(self):
-        sidebar_icons = {"welcome": "smile", "location": "map-pin", "keyboard": "grid", "software": "package", "disk": "hard-drive", "users": "users", "summary": "file-text", "install": "download-cloud", "finish": "check-circle"}
+        sidebar_icons = {"welcome": "smile", "location": "map-pin", "keyboard": "grid", "software": "package", "zram": "zap", "disk": "hard-drive", "users": "users", "summary": "file-text", "install": "download-cloud", "finish": "check-circle"}
         for k, v in sidebar_icons.items():
             data = NetUtils.get_svg_data(v, to_white=True)
             if data:
@@ -701,17 +773,35 @@ class InstallerGUI(QMainWindow):
         self.sidebar_logo.setFixedSize(112, 112)
         self.sidebar_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sidebar_logo.setStyleSheet("background:transparent; border:none; padding:0;")
-        try:
-            logo_data = base64.b64decode(ARVOR_LOGO_PNG_B64)
-            logo_pixmap = QPixmap()
-            logo_pixmap.loadFromData(logo_data, "PNG")
-            if not logo_pixmap.isNull():
-                self.sidebar_logo.setPixmap(
-                    logo_pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio,
-                                       Qt.TransformationMode.SmoothTransformation)
-                )
-        except Exception:
-            self.sidebar_logo.setText("")
+
+        logo_loaded = False
+        for sys_path in [
+            "/usr/share/icons/hicolor/4000x4000/distributor-logo.png",
+            "/usr/share/icons/hicolor/scalable/apps/distributor-logo.svg",
+            "/usr/share/pixmaps/arvor.png"
+        ]:
+            if os.path.exists(sys_path):
+                pm = QPixmap(sys_path)
+                if not pm.isNull():
+                    self.sidebar_logo.setPixmap(
+                        pm.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio,
+                                  Qt.TransformationMode.SmoothTransformation)
+                    )
+                    logo_loaded = True
+                    break
+
+        if not logo_loaded:
+            try:
+                renderer = QSvgRenderer(QByteArray(ARVOR_LOGO_SVG.encode('utf-8')))
+                pm = QPixmap(100, 100)
+                pm.fill(Qt.GlobalColor.transparent)
+                painter = QPainter(pm)
+                renderer.render(painter)
+                painter.end()
+                if not pm.isNull():
+                    self.sidebar_logo.setPixmap(pm)
+            except Exception:
+                self.sidebar_logo.setText("")
 
         logo_layout.addWidget(self.sidebar_logo, 0, Qt.AlignmentFlag.AlignCenter)
         sidebar_layout.addWidget(logo_header, 0)
@@ -748,12 +838,14 @@ class InstallerGUI(QMainWindow):
 
         self.update_sidebar()
         self.btn_back.setEnabled(False)
+        self.change_language(self.initial_lang_idx)
 
     def build_pages(self):
         self.stack.addWidget(self.create_welcome_page())
         self.stack.addWidget(self.create_location_page())
         self.stack.addWidget(self.create_keyboard_page())
         self.stack.addWidget(self.create_desktop_page())
+        self.stack.addWidget(self.create_zram_page())
         self.stack.addWidget(self.create_partitions_page())
         self.stack.addWidget(self.create_users_page())
         self.stack.addWidget(self.create_summary_page())
@@ -809,6 +901,11 @@ class InstallerGUI(QMainWindow):
     def _create_card(self):
         card = QFrame()
         card.setProperty("card", "true")
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 12))
+        shadow.setOffset(0, 4)
+        card.setGraphicsEffect(shadow)
         cl = QVBoxLayout()
         cl.setContentsMargins(25, 25, 25, 25)
         card.setLayout(cl)
@@ -862,13 +959,14 @@ class InstallerGUI(QMainWindow):
             l.addWidget(self._create_alert("warn_power", "danger"))
 
         card, cl = self._create_card()
-        lbl_lang = self._create_label("locale")
+        self.lbl_lang = self._create_label("locale")
         self.c_lang = self._make_combo()
         self.c_lang.addItems(["English", "Português (Brasil)", "Español", "Français", "Deutsch", "Galego"])
         self.c_lang.currentIndexChanged.connect(self.change_language)
 
-        cl.addWidget(lbl_lang)
+        cl.addWidget(self.lbl_lang)
         cl.addWidget(self.c_lang)
+        self.c_lang.setCurrentIndex(self.initial_lang_idx)
         l.addWidget(card)
         l.addStretch()
         w.setLayout(l)
@@ -882,9 +980,9 @@ class InstallerGUI(QMainWindow):
             self.conf["keymap"] = keymap
             self.conf["timezone"] = tz
 
-        self.c_locale.setCurrentText(self.sys_locale)
-        self.c_key.setCurrentText(self.conf["keymap"])
-        self.i_tz.setCurrentText(self.conf["timezone"])
+        if hasattr(self, 'c_locale'): self.c_locale.setCurrentText(self.sys_locale)
+        if hasattr(self, 'c_key'): self.c_key.setCurrentText(self.conf["keymap"])
+        if hasattr(self, 'i_tz'): self.i_tz.setCurrentText(self.conf["timezone"])
 
         self.setWindowTitle(self.t("title"))
         self.update_sidebar()
@@ -892,31 +990,48 @@ class InstallerGUI(QMainWindow):
         for i, s in enumerate(self.steps):
             self.sidebar.item(i).setText(self.t(s))
 
-        self.lbl_loc.setText(self.t("locale"))
-        self.lbl_tz.setText(self.t("tz"))
-        self.lbl_key.setText(self.t("keymap"))
-        self.lbl_key_test.setText(self.t("lbl_key_test"))
-        self.i_key_test.setPlaceholderText(self.t("test_keymap"))
-        self.lbl_de.setText(self.t("de"))
-        self.lbl_disk.setText(self.t("disk"))
-        self.chk_luks.setText(self.t("luks"))
-        self.lbl_luks_p.setText(self.t("luks_p"))
-        self.lbl_host.setText(self.t("host"))
-        self.lbl_user.setText(self.t("user_name"))
-        self.lbl_pass.setText(self.t("pass"))
-        self.lbl_pass_c.setText(self.t("pass_c"))
+        if hasattr(self, 'lbl_lang'): self.lbl_lang.setText(self.t("locale"))
+        if hasattr(self, 'lbl_loc'): self.lbl_loc.setText(self.t("locale"))
+        if hasattr(self, 'lbl_tz'): self.lbl_tz.setText(self.t("tz"))
+        if hasattr(self, 'lbl_key'): self.lbl_key.setText(self.t("keymap"))
+        if hasattr(self, 'lbl_key_test'): self.lbl_key_test.setText(self.t("lbl_key_test"))
+        if hasattr(self, 'i_key_test'): self.i_key_test.setPlaceholderText(self.t("test_keymap"))
+        if hasattr(self, 'lbl_de'): self.lbl_de.setText(self.t("de"))
+        if hasattr(self, 'lbl_disk'): self.lbl_disk.setText(self.t("disk"))
+        if hasattr(self, 'chk_luks'): self.chk_luks.setText(self.t("luks"))
+        if hasattr(self, 'lbl_luks_p'): self.lbl_luks_p.setText(self.t("luks_p"))
+        if hasattr(self, 'lbl_host'): self.lbl_host.setText(self.t("host"))
+        if hasattr(self, 'lbl_display_name'): self.lbl_display_name.setText(self.t("display_name"))
+        if hasattr(self, 'lbl_user'): self.lbl_user.setText(self.t("user_name"))
+        if hasattr(self, 'lbl_pass'): self.lbl_pass.setText(self.t("pass"))
+        if hasattr(self, 'lbl_pass_c'): self.lbl_pass_c.setText(self.t("pass_c"))
+        if hasattr(self, 'lbl_swap'): self.lbl_swap.setText(self.t("lbl_swap"))
+        if hasattr(self, 'c_swap'): self.update_swap_options()
+        if hasattr(self, 'update_swap_desc'): self.update_swap_desc()
+        if hasattr(self, 'update_de_desc'): self.update_de_desc()
+        if hasattr(self, 'lbl_apps_header'): self.lbl_apps_header.setText(self.t("apps_header"))
+        if hasattr(self, 'lbl_drivers_header'): self.lbl_drivers_header.setText(self.t("drivers_header"))
+        if hasattr(self, 'chk_firefox'): self.chk_firefox.setText(self.t("app_firefox"))
+        if hasattr(self, 'chk_chromium'): self.chk_chromium.setText(self.t("app_chromium"))
+        if hasattr(self, 'chk_office'): self.chk_office.setText(self.t("app_office"))
+        if hasattr(self, 'chk_vlc'): self.chk_vlc.setText(self.t("app_vlc"))
+        if hasattr(self, 'chk_nvidia'): self.chk_nvidia.setText(self.t("drv_nvidia"))
+        if hasattr(self, 'chk_firmware'): self.chk_firmware.setText(self.t("drv_firmware"))
 
-        self.btn_back.setText(self.t("back"))
-        idx = self.stack.currentIndex()
-        if idx == 6: self.btn_next.setText(self.t("install"))
-        elif idx == 8: self.btn_next.setText(self.t("quit"))
-        else: self.btn_next.setText(self.t("next"))
+        if hasattr(self, 'btn_back'): self.btn_back.setText(self.t("back"))
+        if hasattr(self, 'btn_next'):
+            idx = self.stack.currentIndex()
+            if idx == 7: self.btn_next.setText(self.t("install"))
+            elif idx == 9: self.btn_next.setText(self.t("quit"))
+            else: self.btn_next.setText(self.t("next"))
 
         for i in range(self.stack.count()):
             page = self.stack.widget(i)
-            for child in page.findChildren(QLabel):
-                if child.property("text_key"):
-                    child.setText(self.t(child.property("text_key")))
+            target = page.widget() if isinstance(page, QScrollArea) else page
+            if target:
+                for child in target.findChildren(QLabel):
+                    if child.property("text_key"):
+                        child.setText(self.t(child.property("text_key")))
 
     def create_location_page(self):
         w = QWidget()
@@ -976,8 +1091,14 @@ class InstallerGUI(QMainWindow):
             Sys.run(f"setxkbmap {keymap}", check=False)
 
     def create_desktop_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;} QWidget#desktop_container{background:transparent;}")
+
         w = QWidget()
-        l = QVBoxLayout()
+        w.setObjectName("desktop_container")
+        l = QVBoxLayout(w)
+        l.setContentsMargins(0, 0, 8, 0)
         l.addWidget(self.create_title("step_desktop"))
         card, cl = self._create_card()
 
@@ -985,32 +1106,172 @@ class InstallerGUI(QMainWindow):
         self.c_de = self._make_combo()
         for d in self.desktops: self.c_de.addItem(d[0], d[1])
 
+        de_info_box = QFrame()
+        de_info_box.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-top: 10px;")
+        de_info_layout = QVBoxLayout(de_info_box)
+
+        self.lbl_de_desc = QLabel()
+        self.lbl_de_desc.setStyleSheet("font-size: 13px; color: #475569; line-height: 1.4;")
+        self.lbl_de_desc.setWordWrap(True)
+        de_info_layout.addWidget(self.lbl_de_desc)
+
+        self.de_descs_map = {
+            "None (CLI)": "de_desc_cli",
+            "XFCE": "de_desc_xfce",
+            "GNOME": "de_desc_gnome",
+            "KDE Plasma": "de_desc_kde",
+            "Cinnamon": "de_desc_cinnamon",
+            "MATE": "de_desc_mate",
+            "LXQt": "de_desc_lxqt"
+        }
+
+        def update_de_desc(idx=0):
+            name = self.c_de.currentText()
+            desc_key = self.de_descs_map.get(name, "de_desc_cli")
+            self.lbl_de_desc.setText(self.t(desc_key))
+
+        self.update_de_desc = update_de_desc
+        self.c_de.currentIndexChanged.connect(self.update_de_desc)
+        self.update_de_desc(0)
+
         cl.addWidget(self.lbl_de)
         cl.addWidget(self.c_de)
+        cl.addWidget(de_info_box)
+
+        self.lbl_apps_header = self._create_label("apps_header", "font-size: 14px; font-weight: 700; color: #1e293b; margin-top: 18px; margin-bottom: 6px;")
+        cl.addWidget(self.lbl_apps_header)
+
+        apps_grid = QGridLayout()
+        apps_grid.setSpacing(12)
+
+        self.chk_firefox = QCheckBox(self.t("app_firefox"))
+        self.chk_firefox.setChecked(True)
+        self.chk_chromium = QCheckBox(self.t("app_chromium"))
+        self.chk_office = QCheckBox(self.t("app_office"))
+        self.chk_vlc = QCheckBox(self.t("app_vlc"))
+
+        apps_grid.addWidget(self.chk_firefox, 0, 0)
+        apps_grid.addWidget(self.chk_chromium, 0, 1)
+        apps_grid.addWidget(self.chk_office, 1, 0)
+        apps_grid.addWidget(self.chk_vlc, 1, 1)
+        cl.addLayout(apps_grid)
+
+        self.lbl_drivers_header = self._create_label("drivers_header", "font-size: 14px; font-weight: 700; color: #1e293b; margin-top: 16px; margin-bottom: 6px;")
+        cl.addWidget(self.lbl_drivers_header)
+
+        drivers_grid = QGridLayout()
+        drivers_grid.setSpacing(12)
+
+        self.chk_nvidia = QCheckBox(self.t("drv_nvidia"))
+        self.chk_firmware = QCheckBox(self.t("drv_firmware"))
+        self.chk_firmware.setChecked(True)
+
+        drivers_grid.addWidget(self.chk_nvidia, 0, 0)
+        drivers_grid.addWidget(self.chk_firmware, 0, 1)
+        cl.addLayout(drivers_grid)
+
         l.addWidget(card)
         l.addStretch()
-        w.setLayout(l)
-        return w
+        scroll.setWidget(w)
+        return scroll
+
+    def create_zram_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;} QWidget#zram_container{background:transparent;}")
+
+        w = QWidget()
+        w.setObjectName("zram_container")
+        l = QVBoxLayout(w)
+        l.setContentsMargins(0, 0, 8, 0)
+        l.addWidget(self.create_title("zram_title", "zram_sub"))
+
+        card_main, cl_main = self._create_card()
+
+        self.lbl_swap = self._create_label("lbl_swap", "font-weight: 700; color: #1e293b; font-size: 15px; margin-bottom: 6px;")
+        self.c_swap = self._make_combo()
+
+        swap_info_box = QFrame()
+        swap_info_box.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-top: 12px;")
+        swap_info_layout = QVBoxLayout(swap_info_box)
+
+        self.lbl_swap_desc = QLabel()
+        self.lbl_swap_desc.setStyleSheet("font-size: 13px; color: #475569; line-height: 1.5;")
+        self.lbl_swap_desc.setWordWrap(True)
+        swap_info_layout.addWidget(self.lbl_swap_desc)
+
+        self.swap_descs_map = {
+            "zram": "swap_desc_zram",
+            "file_auto": "swap_desc_file_auto",
+            "file_2g": "swap_desc_file_2g",
+            "file_4g": "swap_desc_file_4g",
+            "file_8g": "swap_desc_file_8g",
+            "none": "swap_desc_none"
+        }
+
+        def update_swap_desc(idx=0):
+            mode = self.c_swap.currentData() if hasattr(self, 'c_swap') and self.c_swap.count() > 0 else "zram"
+            desc_key = self.swap_descs_map.get(mode, "swap_desc_zram")
+            self.lbl_swap_desc.setText(self.t(desc_key))
+
+        self.update_swap_desc = update_swap_desc
+        self.update_swap_options()
+        self.c_swap.currentIndexChanged.connect(self.on_swap_mode_changed)
+        self.update_swap_desc(0)
+
+        cl_main.addWidget(self.lbl_swap)
+        cl_main.addWidget(self.c_swap)
+        cl_main.addWidget(swap_info_box)
+        l.addWidget(card_main)
+        l.addStretch()
+        scroll.setWidget(w)
+        return scroll
+
+    def update_swap_options(self):
+        if not hasattr(self, 'c_swap'): return
+        current = self.c_swap.currentData() if self.c_swap.count() > 0 else (self.conf.get("swap_mode") or "zram")
+        self.c_swap.blockSignals(True)
+        self.c_swap.clear()
+        self.c_swap.addItem(self.t("swap_zram"), "zram")
+        self.c_swap.addItem(self.t("swap_auto"), "file_auto")
+        self.c_swap.addItem(self.t("swap_file_2g"), "file_2g")
+        self.c_swap.addItem(self.t("swap_file_4g"), "file_4g")
+        self.c_swap.addItem(self.t("swap_file_8g"), "file_8g")
+        self.c_swap.addItem(self.t("swap_none"), "none")
+        for idx in range(self.c_swap.count()):
+            if self.c_swap.itemData(idx) == current:
+                self.c_swap.setCurrentIndex(idx)
+                break
+        self.c_swap.blockSignals(False)
+        if hasattr(self, 'update_swap_desc'):
+            self.update_swap_desc()
+
+    def on_swap_mode_changed(self, idx):
+        if hasattr(self, 'c_swap') and self.c_swap.count() > 0:
+            self.conf["swap_mode"] = self.c_swap.currentData() or "zram"
+            if hasattr(self, 'update_swap_desc'):
+                self.update_swap_desc()
 
     def _make_password_field(self, enabled=True):
-        """Returns (wrapper_widget, line_edit) with a visible Mostrar/Ocultar button."""
         wrapper = QFrame()
+        wrapper.setFixedHeight(44)
         wrapper.setStyleSheet(
             "QFrame{background:#fff;border:1px solid #d9e1eb;border-radius:12px;}"
-            "QFrame:focus-within{border:1px solid #4a78ff;background:#fbfcff;}"
+            "QFrame:focus-within{border:1.5px solid #4a78ff;background:#fbfcff;}"
         )
-        h = QHBoxLayout()
-        h.setContentsMargins(12, 0, 8, 0)
+        h = QHBoxLayout(wrapper)
+        h.setContentsMargins(14, 0, 10, 0)
         h.setSpacing(0)
+        h.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         field = QLineEdit()
         field.setEchoMode(QLineEdit.EchoMode.Password)
         field.setEnabled(enabled)
-        field.setStyleSheet("border:none;background:transparent;padding:12px 0;color:#243042;")
+        field.setStyleSheet("border:none;background:transparent;padding:0;margin:0;min-height:38px;color:#243042;font-size:14px;")
         btn = QPushButton("Mostrar")
         btn.setFixedWidth(65)
         btn.setStyleSheet(
             "QPushButton{border:none;background:transparent;color:#4a78ff;"
-            "font-size:12px;font-weight:600;padding:8px 0;}"
+            "font-size:12px;font-weight:600;padding:0;margin:0;}"
             "QPushButton:hover{color:#3868ef;}"
         )
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1024,12 +1285,17 @@ class InstallerGUI(QMainWindow):
         btn.clicked.connect(toggle)
         h.addWidget(field)
         h.addWidget(btn)
-        wrapper.setLayout(h)
         return wrapper, field
 
     def create_partitions_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;} QWidget#partitions_container{background:transparent;}")
+
         w = QWidget()
-        l = QVBoxLayout()
+        w.setObjectName("partitions_container")
+        l = QVBoxLayout(w)
+        l.setContentsMargins(0, 0, 8, 0)
         l.addWidget(self.create_title("step_partitions"))
         card, cl = self._create_card()
 
@@ -1037,36 +1303,39 @@ class InstallerGUI(QMainWindow):
         self.c_disk = self._make_combo()
         self.disks_info = Sys.list_disks()
         for d in self.disks_info:
-            self.c_disk.addItem(f"{d['model']} ({d['size']}) - {d['name']}", f"/dev/{d['name']}")
+            self.c_disk.addItem(f"{d['model']} ({d['size']}) - /dev/{d['name']}", f"/dev/{d['name']}")
 
         cl.addWidget(self.lbl_disk)
         cl.addWidget(self.c_disk)
         cl.addSpacing(15)
 
-        # Partition Layout Preview Bar
         self.lbl_disk_preview = self._create_label("lbl_disk_layout")
         cl.addWidget(self.lbl_disk_preview)
 
         preview_frame = QFrame()
-        preview_frame.setStyleSheet("background: #f1f5f9; border-radius: 8px; padding: 4px;")
+        preview_frame.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 6px;")
         bar_layout = QHBoxLayout()
         bar_layout.setContentsMargins(0, 0, 0, 0)
-        bar_layout.setSpacing(2)
+        bar_layout.setSpacing(4)
 
         seg_esp = QLabel("ESP (512M)")
-        seg_esp.setStyleSheet("background: #3b82f6; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        seg_esp.setToolTip("EFI System Partition (/boot/efi - 512 MiB FAT32)")
+        seg_esp.setStyleSheet("background: #3b82f6; color: white; border-radius: 8px; padding: 10px 4px; font-size: 11px; font-weight: bold;")
         seg_esp.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         seg_boot = QLabel("BOOT (1G)")
-        seg_boot.setStyleSheet("background: #6366f1; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        seg_boot.setToolTip("Partition /boot (1024 MiB EXT4)")
+        seg_boot.setStyleSheet("background: #6366f1; color: white; border-radius: 8px; padding: 10px 4px; font-size: 11px; font-weight: bold;")
         seg_boot.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.seg_thin = QLabel("Thin Pool (~78%)")
-        self.seg_thin.setStyleSheet("background: #10b981; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        self.seg_thin = QLabel("Arvor Root (~78%)")
+        self.seg_thin.setToolTip("LVM Thin Pool para o Sistema Arvor OS (XFS ~78%)")
+        self.seg_thin.setStyleSheet("background: #10b981; color: white; border-radius: 8px; padding: 10px 4px; font-size: 11px; font-weight: bold;")
         self.seg_thin.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.seg_free = QLabel("VG Free (~22%)")
-        self.seg_free.setStyleSheet("background: #f59e0b; color: white; border-radius: 6px; padding: 8px 4px; font-size: 11px; font-weight: bold;")
+        self.seg_free = QLabel("Snapshots (~22%)")
+        self.seg_free.setToolTip("Volume Group Reservado para Snapshots NSM (~22%)")
+        self.seg_free.setStyleSheet("background: #8b5cf6; color: white; border-radius: 8px; padding: 10px 4px; font-size: 11px; font-weight: bold;")
         self.seg_free.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         bar_layout.addWidget(seg_esp, 1)
@@ -1076,9 +1345,16 @@ class InstallerGUI(QMainWindow):
         preview_frame.setLayout(bar_layout)
         cl.addWidget(preview_frame)
 
+        legend_box = QFrame()
+        legend_box.setStyleSheet("background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; margin-top: 10px;")
+        legend_layout = QVBoxLayout(legend_box)
+        legend_layout.setContentsMargins(0, 0, 0, 0)
+
         self.lbl_disk_legend = QLabel()
-        self.lbl_disk_legend.setStyleSheet("color: #64748b; font-size: 12px; margin-top: 5px;")
-        cl.addWidget(self.lbl_disk_legend)
+        self.lbl_disk_legend.setStyleSheet("color: #334155; font-size: 13px; line-height: 1.6;")
+        self.lbl_disk_legend.setWordWrap(True)
+        legend_layout.addWidget(self.lbl_disk_legend)
+        cl.addWidget(legend_box)
 
         self.c_disk.currentIndexChanged.connect(self.update_disk_preview)
         self.update_disk_preview()
@@ -1091,14 +1367,8 @@ class InstallerGUI(QMainWindow):
         cl.addSpacing(15)
 
         self.chk_luks = QCheckBox(self.t("luks"))
-        self.chk_luks.setStyleSheet(
-            "QCheckBox{font-weight:600;color:#334155;margin-bottom:5px;}"
-            "QCheckBox::indicator{width:18px;height:18px;border:2px solid #d9e1eb;border-radius:5px;background:#fff;}"
-            "QCheckBox::indicator:hover{border-color:#4a78ff;}"
-            "QCheckBox::indicator:checked{background:#4a78ff;border-color:#4a78ff;}"
-        )
         self.chk_luks.setCursor(Qt.CursorShape.PointingHandCursor)
-        lbl_luks_hint = QLabel(self.t("luks_hint") if "luks_hint" in (self.lang_map or {}) else "Clique na caixa para ativar a encriptação do disco")
+        lbl_luks_hint = QLabel("Clique na caixa para ativar a encriptação do disco")
         lbl_luks_hint.setStyleSheet("color:#94a3b8;font-size:12px;margin-bottom:8px;")
         self.lbl_luks_p = self._create_label("luks_p", "font-weight: 600; color: #64748b; margin-top: 10px; margin-bottom: 5px;")
         self.luks_p_wrapper, self.i_luks_p = self._make_password_field(enabled=False)
@@ -1120,24 +1390,79 @@ class InstallerGUI(QMainWindow):
 
         l.addWidget(card)
         l.addStretch()
-        w.setLayout(l)
-        return w
+        scroll.setWidget(w)
+        return scroll
+
+    def update_swap_options(self):
+        if not hasattr(self, 'c_swap'): return
+        curr_mode = self.conf.get("swap_mode", "zram")
+        self.c_swap.blockSignals(True)
+        self.c_swap.clear()
+        selected_idx = 0
+        for idx, (mode, label_key) in enumerate(self.swap_modes):
+            self.c_swap.addItem(self.t(label_key), mode)
+            if mode == curr_mode:
+                selected_idx = idx
+        self.c_swap.setCurrentIndex(selected_idx)
+        self.c_swap.blockSignals(False)
+
+    def on_swap_mode_changed(self, idx):
+        if hasattr(self, 'c_swap'):
+            mode = self.c_swap.currentData()
+            if mode:
+                self.conf["swap_mode"] = mode
 
     def update_disk_preview(self):
         idx = self.c_disk.currentIndex()
         if idx >= 0 and idx < len(self.disks_info):
             d = self.disks_info[idx]
             size_str = d.get('size', '')
-            self.lbl_disk_legend.setText(f"Drive: /dev/{d['name']} ({d['model']} - {size_str}) | Scheme: GPT | ESP: 512MiB | Boot: 1024MiB | Thin Pool: ~78% | VG Free: ~22%")
+            name = d.get('name', 'sda')
+            model = d.get('model', 'Disk')
+            self.lbl_disk_legend.setText(
+                f"<b>Dispositivo Selecionado:</b> /dev/{name} ({model} - {size_str}) | <b>Tabela:</b> GPT<br>"
+                f"<span style='color:#3b82f6; font-weight:bold;'>[ESP]</span> 512 MiB (FAT32, /boot/efi) &nbsp;&nbsp;&nbsp;&nbsp; "
+                f"<span style='color:#6366f1; font-weight:bold;'>[Boot]</span> 1024 MiB (EXT4, /boot)<br>"
+                f"<span style='color:#10b981; font-weight:bold;'>[Arvor OS Root]</span> ~78% (XFS Thin Pool) &nbsp;&nbsp;&nbsp;&nbsp; "
+                f"<span style='color:#8b5cf6; font-weight:bold;'>[Snapshots NSM]</span> ~22% (VG Free)"
+            )
+
+    def slugify_username(self, name):
+        import unicodedata, re
+        n = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+        n = n.lower().strip()
+        n = re.sub(r'[\s_]+', '-', n)
+        n = re.sub(r'[^a-z0-9-]', '', n)
+        n = re.sub(r'^[^a-z]+', '', n)
+        return n[:32]
+
+    def on_display_name_changed(self, text):
+        if not self.user_manually_edited:
+            slugified = self.slugify_username(text)
+            self.i_user.setText(slugified)
+
+    def on_username_edited(self, text):
+        self.user_manually_edited = True
 
     def create_users_page(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea{border:none;background:transparent;} QWidget#users_container{background:transparent;}")
+
         w = QWidget()
-        l = QVBoxLayout()
+        w.setObjectName("users_container")
+        l = QVBoxLayout(w)
+        l.setContentsMargins(0, 0, 8, 0)
         l.addWidget(self.create_title("step_users"))
         card, cl = self._create_card()
 
+        self.lbl_display_name = self._create_label("display_name")
+        self.i_display_name = QLineEdit()
+        self.i_display_name.setPlaceholderText("Ex: João da Silva")
+
         self.lbl_user = self._create_label("user_name")
         self.i_user = QLineEdit()
+        self.i_user.setPlaceholderText("Ex: joao-da-silva")
         self.lbl_user_err = QLabel()
         self.lbl_user_err.setStyleSheet("color: #ef4444; font-size: 12px; margin-bottom: 5px;")
         self.lbl_user_err.setWordWrap(True)
@@ -1150,19 +1475,22 @@ class InstallerGUI(QMainWindow):
         self.pass_wrapper, self.i_pass = self._make_password_field()
         self.i_pass.setPlaceholderText("Senha do utilizador")
 
-        # Password Strength Bar
         self.pass_strength_bar = QProgressBar()
         self.pass_strength_bar.setFixedHeight(6)
         self.pass_strength_bar.setTextVisible(False)
         self.pass_strength_bar.setValue(0)
+        self.pass_strength_bar.hide()
 
         self.lbl_strength = QLabel()
-        self.lbl_strength.setStyleSheet("font-size: 12px; color: #64748b;")
+        self.lbl_strength.setStyleSheet("font-size: 12px; color: #64748b; margin-top: 4px; margin-bottom: 6px;")
+        self.lbl_strength.hide()
 
         self.lbl_pass_c = self._create_label("pass_c")
         self.pass_c_wrapper, self.i_pass_c = self._make_password_field()
         self.i_pass_c.setPlaceholderText("Confirmar senha")
 
+        cl.addWidget(self.lbl_display_name)
+        cl.addWidget(self.i_display_name)
         cl.addWidget(self.lbl_user)
         cl.addWidget(self.i_user)
         cl.addWidget(self.lbl_user_err)
@@ -1175,14 +1503,16 @@ class InstallerGUI(QMainWindow):
         cl.addWidget(self.lbl_pass_c)
         cl.addWidget(self.pass_c_wrapper)
 
+        self.i_display_name.textChanged.connect(self.on_display_name_changed)
+        self.i_user.textEdited.connect(self.on_username_edited)
         self.i_user.textChanged.connect(self.validate_user_fields)
         self.i_host.textChanged.connect(self.validate_user_fields)
         self.i_pass.textChanged.connect(self.update_password_strength)
 
         l.addWidget(card)
         l.addStretch()
-        w.setLayout(l)
-        return w
+        scroll.setWidget(w)
+        return scroll
 
     def validate_user_fields(self):
         user = self.i_user.text().strip()
@@ -1196,8 +1526,13 @@ class InstallerGUI(QMainWindow):
     def update_password_strength(self, pwd):
         if not pwd:
             self.pass_strength_bar.setValue(0)
+            self.pass_strength_bar.hide()
             self.lbl_strength.setText("")
+            self.lbl_strength.hide()
             return
+
+        self.pass_strength_bar.show()
+        self.lbl_strength.show()
         score = 0
         if len(pwd) >= 6: score += 20
         if len(pwd) >= 10: score += 20
@@ -1235,38 +1570,388 @@ class InstallerGUI(QMainWindow):
         w.setLayout(l)
         return w
 
+    def detect_hardware_info(self):
+        cpu = "Processador Otimizado (8 Cores x86_64)"
+        ram = "Memoria RAM: ~16 GB"
+        gpu = "Placa Grafica: Aceleracao de Hardware Ativa"
+        if not SIMULATE:
+            try:
+                with open("/proc/cpuinfo", "r") as f:
+                    for line in f:
+                        if "model name" in line:
+                            cpu = f"Processador: {line.split(':')[1].strip()}"
+                            break
+            except Exception: pass
+            try:
+                with open("/proc/meminfo", "r") as f:
+                    for line in f:
+                        if "MemTotal" in line:
+                            kb = int(line.split()[1])
+                            gb = round(kb / (1024 * 1024), 1)
+                            ram = f"Memoria RAM: {gb} GB"
+                            break
+            except Exception: pass
+        return f"{cpu}<br>{ram}<br>{gpu}"
+
     def populate_summary(self):
+        disp = self.conf.get('display_name', self.conf['user'])
+        user_info = f"{disp} ({self.conf['user']})" if disp != self.conf['user'] else self.conf['user']
+        extras = self.conf.get('extra_pkgs', '')
+        extra_str = f" + Pacotes Opcionais ({extras})" if extras else ""
+        hw_info = self.detect_hardware_info()
+        swap_label_key = next((lk for m, lk in self.swap_modes if m == self.conf.get("swap_mode", "zram")), "swap_zram")
+        swap_desc = self.t(swap_label_key)
         html = f"""
         <style>
-            h3 {{ color: #0f172a; margin-bottom: 8px; font-size: 17px; font-family: -apple-system, sans-serif; font-weight: 700; }}
-            p {{ color: #475569; margin-top: 0; margin-bottom: 18px; font-family: -apple-system, sans-serif; font-size: 15px; }}
-            hr {{ border: 0; border-top: 1px solid #f1f5f9; margin: 15px 0; }}
+            h3 {{ color: #0f172a; margin-bottom: 8px; font-size: 16px; font-family: -apple-system, sans-serif; font-weight: 700; }}
+            p {{ color: #475569; margin-top: 0; margin-bottom: 16px; font-family: -apple-system, sans-serif; font-size: 14px; line-height: 1.4; }}
+            hr {{ border: 0; border-top: 1px solid #f1f5f9; margin: 12px 0; }}
         </style>
+        <h3>Especificações do Sistema & Hardware</h3><p>{hw_info}</p><hr>
         <h3>{self.t("step_location")}</h3><p>{self.sys_locale} • {self.conf['timezone']}</p><hr>
         <h3>{self.t("step_keyboard")}</h3><p>{self.conf['keymap']}</p><hr>
-        <h3>{self.t("step_desktop")}</h3><p>{self.conf['de_name']}</p><hr>
-        <h3>{self.t("step_partitions")}</h3><p>{self.conf['disk']} <br>LUKS: {'Enabled' if self.conf['luks'] else 'Disabled'}</p><hr>
-        <h3>{self.t("step_users")}</h3><p>{self.conf['user']} @ {self.conf['hostname']}</p>
+        <h3>{self.t("step_desktop")}</h3><p>{self.conf['de_name']}{extra_str}</p><hr>
+        <h3>{self.t("step_partitions")}</h3><p>{self.conf['disk']} <br>LUKS: {'Activado' if self.conf['luks'] else 'Desactivado'}<br><b>Memória & Swap:</b> {swap_desc}</p><hr>
+        <h3>{self.t("step_users")}</h3><p>{user_info} @ {self.conf['hostname']}</p>
         """
         self.lbl_sum_text.setHtml(html)
 
+    def update_slide_ui(self):
+        s = self.slides[self.current_slide_idx]
+        svg_code = self.slide_svgs[self.current_slide_idx]
+        try:
+            renderer = QSvgRenderer(QByteArray(svg_code.encode('utf-8')))
+            pm = QPixmap(300, 240)
+            pm.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pm)
+            renderer.render(painter)
+            painter.end()
+            if not pm.isNull():
+                self.lbl_slide_art.setPixmap(pm)
+        except Exception:
+            pass
+
+        self.lbl_slide_title.setText(self.t(s["title_key"]))
+        self.lbl_slide_desc.setText(self.t(s["desc_key"]))
+        for i, dot in enumerate(self.slide_dots):
+            if i == self.current_slide_idx:
+                dot.setStyleSheet("background:#38bdf8; border-radius:4px; min-width:20px; max-width:20px; min-height:8px; max-height:8px;")
+            else:
+                dot.setStyleSheet("background:rgba(255,255,255,0.25); border-radius:4px; min-width:8px; max-width:8px; min-height:8px; max-height:8px;")
+
+    def next_slide(self):
+        self.current_slide_idx = (self.current_slide_idx + 1) % len(self.slides)
+        self.update_slide_ui()
+
+    def prev_slide(self):
+        self.current_slide_idx = (self.current_slide_idx - 1) % len(self.slides)
+        self.update_slide_ui()
+
     def create_install_page(self):
         w = QWidget()
-        l = QVBoxLayout()
+        l = QVBoxLayout(w)
+        l.setContentsMargins(0, 0, 0, 0)
+        l.setSpacing(16)
         l.addWidget(self.create_title("step_install"))
+
+        self.slide_svgs = [
+            # Slide 1: Geometric Snapshot Shield & Arvor Wireframe
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 280" width="300" height="240">
+              <defs>
+                <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.9"/>
+                  <stop offset="100%" stop-color="#2563eb" stop-opacity="0.3"/>
+                </linearGradient>
+              </defs>
+              <polygon points="260,20 315,95 260,75 205,95" fill="none" stroke="#38bdf8" stroke-width="1.5" opacity="0.3"/>
+              <polygon points="260,75 335,160 260,140 185,160" fill="none" stroke="#38bdf8" stroke-width="1.5" opacity="0.3"/>
+              <polygon points="260,140 350,225 260,205 170,225" fill="none" stroke="#38bdf8" stroke-width="1.5" opacity="0.3"/>
+              <path d="M 230 60 L 295 95 C 295 160 230 205 230 205 C 230 205 165 160 165 95 Z" fill="url(#g1)" stroke="#60a5fa" stroke-width="2"/>
+              <circle cx="230" cy="130" r="28" fill="#0f172a" opacity="0.85" stroke="#38bdf8" stroke-width="2"/>
+              <path d="M 230 112 A 18 18 0 1 1 212 130" fill="none" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round"/>
+              <polygon points="212,117 220,112 212,107" fill="#38bdf8"/>
+              <polyline points="230 119 230 130 238 134" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round"/>
+              <circle cx="135" cy="75" r="3" fill="#38bdf8" opacity="0.6"/>
+              <circle cx="150" cy="225" r="2.5" fill="#38bdf8" opacity="0.4"/>
+            </svg>""",
+
+            # Slide 2: Polygonal Cyber Security Matrix
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 280" width="300" height="240">
+              <defs>
+                <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#34d399" stop-opacity="0.85"/>
+                  <stop offset="100%" stop-color="#059669" stop-opacity="0.25"/>
+                </linearGradient>
+              </defs>
+              <polygon points="250,25 320,60 300,180 250,250 200,180 180,60" fill="none" stroke="#34d399" stroke-width="1.5" opacity="0.35"/>
+              <polygon points="250,50 295,75 280,165 250,215 220,165 205,75" fill="url(#g2)" stroke="#10b981" stroke-width="2"/>
+              <circle cx="250" cy="115" r="16" fill="#0f172a" stroke="#34d399" stroke-width="2"/>
+              <path d="M 243 115 L 243 107 C 243 103 257 103 257 107 L 257 115" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round"/>
+              <circle cx="250" cy="122" r="3" fill="#ffffff"/>
+              <line x1="150" y1="135" x2="195" y2="135" stroke="#34d399" stroke-width="1.5" opacity="0.5" stroke-dasharray="4,4"/>
+              <circle cx="150" cy="135" r="3" fill="#34d399"/>
+            </svg>""",
+
+            # Slide 3: Atomic Lifecycle Core
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 280" width="300" height="240">
+              <defs>
+                <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.9"/>
+                  <stop offset="100%" stop-color="#6366f1" stop-opacity="0.3"/>
+                </linearGradient>
+              </defs>
+              <ellipse cx="250" cy="135" rx="80" ry="32" fill="none" stroke="#a78bfa" stroke-width="1.5" opacity="0.45" transform="rotate(-30 250 135)"/>
+              <ellipse cx="250" cy="135" rx="80" ry="32" fill="none" stroke="#a78bfa" stroke-width="1.5" opacity="0.45" transform="rotate(30 250 135)"/>
+              <ellipse cx="250" cy="135" rx="80" ry="32" fill="none" stroke="#a78bfa" stroke-width="1.5" opacity="0.45" transform="rotate(90 250 135)"/>
+              <polygon points="250,95 288,117 250,139 212,117" fill="#c4b5fd" opacity="0.9"/>
+              <polygon points="212,117 250,139 250,183 212,161" fill="#8b5cf6" opacity="0.8"/>
+              <polygon points="288,117 250,139 250,183 288,161" fill="#6d28d9" opacity="0.95"/>
+              <circle cx="315" cy="95" r="4" fill="#a78bfa"/>
+              <circle cx="185" cy="175" r="3.5" fill="#c4b5fd"/>
+            </svg>""",
+
+            # Slide 4: Low-Poly Faceted Arvor Pine Tree
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 280" width="300" height="240">
+              <defs>
+                <linearGradient id="treeGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#38bdf8"/>
+                  <stop offset="100%" stop-color="#0284c7"/>
+                </linearGradient>
+                <linearGradient id="treeGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#60a5fa"/>
+                  <stop offset="100%" stop-color="#2563eb"/>
+                </linearGradient>
+                <linearGradient id="treeGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#818cf8"/>
+                  <stop offset="100%" stop-color="#4f46e5"/>
+                </linearGradient>
+              </defs>
+              <polygon points="250,20 288,78 250,65" fill="url(#treeGrad1)" opacity="0.95"/>
+              <polygon points="250,20 212,78 250,65" fill="url(#treeGrad1)" opacity="0.75"/>
+              <polygon points="250,65 315,145 250,128" fill="url(#treeGrad2)" opacity="0.95"/>
+              <polygon points="250,65 185,145 250,128" fill="url(#treeGrad2)" opacity="0.75"/>
+              <polygon points="250,128 340,218 250,195" fill="url(#treeGrad3)" opacity="0.95"/>
+              <polygon points="250,128 160,218 250,195" fill="url(#treeGrad3)" opacity="0.75"/>
+              <polygon points="238,195 262,195 264,250 236,250" fill="#475569"/>
+              <line x1="250" y1="20" x2="310" y2="30" stroke="#38bdf8" stroke-width="1.5" opacity="0.6"/>
+              <circle cx="310" cy="30" r="4" fill="#38bdf8"/>
+              <line x1="185" y1="145" x2="145" y2="130" stroke="#60a5fa" stroke-width="1.5" opacity="0.5"/>
+              <circle cx="145" cy="130" r="3" fill="#60a5fa"/>
+            </svg>""",
+
+            """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 240" width="300" height="240">
+              <defs>
+                <linearGradient id="debRed" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#ff2a6d"/>
+                  <stop offset="50%" stop-color="#d70a53"/>
+                  <stop offset="100%" stop-color="#99002a"/>
+                </linearGradient>
+                <linearGradient id="arvT1" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#38bdf8"/>
+                  <stop offset="100%" stop-color="#0284c7"/>
+                </linearGradient>
+                <linearGradient id="arvT2" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#60a5fa"/>
+                  <stop offset="100%" stop-color="#2563eb"/>
+                </linearGradient>
+                <linearGradient id="arvT3" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#818cf8"/>
+                  <stop offset="100%" stop-color="#4f46e5"/>
+                </linearGradient>
+              </defs>
+              <!-- Left: Exact Complete Official Debian Logo (debian.org) -->
+              <g transform="translate(18, 20) scale(1.18)">
+                <g fill="url(#debRed)">
+                  <path d="M60.969,47.645c-1.494,0.02,0.281,0.768,2.232,1.069 c0.541-0.422,1.027-0.846,1.463-1.26C63.451,47.751,62.215,47.758,60.969,47.645"/>
+                  <path d="M68.986,45.646c0.893-1.229,1.541-2.573,1.77-3.963 c-0.201,0.99-0.736,1.845-1.244,2.749c-2.793,1.759-0.264-1.044-0.002-2.111C66.508,46.104,69.096,44.589,68.986,45.646"/>
+                  <path d="M71.949,37.942c0.182-2.691-0.529-1.839-0.768-0.814 C71.459,37.274,71.68,39.026,71.949,37.942"/>
+                  <path d="M55.301,1.163c0.798,0.142,1.724,0.252,1.591,0.443 C57.768,1.413,57.965,1.239,55.301,1.163"/>
+                  <path d="M56.893,1.606l-0.561,0.117l0.523-0.048L56.893,1.606"/>
+                  <path d="M81.762,38.962c0.09,2.416-0.705,3.59-1.424,5.666l-1.293,0.643 c-1.057,2.054,0.105,1.304-0.652,2.937c-1.652,1.467-5.006,4.589-6.08,4.875c-0.785-0.017,0.531-0.926,0.703-1.281 c-2.209,1.516-1.773,2.276-5.152,3.199l-0.098-0.221c-8.33,3.92-19.902-3.847-19.75-14.443c-0.088,0.672-0.253,0.504-0.437,0.774 c-0.43-5.451,2.518-10.926,7.49-13.165c4.863-2.406,10.564-1.42,14.045,1.829c-1.912-2.506-5.721-5.163-10.232-4.917 c-4.421,0.072-8.558,2.881-9.938,5.932c-2.264,1.425-2.528,5.496-3.514,6.242c-1.329,9.76,2.497,13.975,8.97,18.936 c1.016,0.686,0.286,0.791,0.422,1.313c-2.15-1.006-4.118-2.526-5.738-4.387c0.86,1.257,1.787,2.479,2.986,3.439 c-2.029-0.685-4.738-4.913-5.527-5.085c3.495,6.258,14.178,10.975,19.775,8.634c-2.59,0.096-5.879,0.053-8.787-1.022 c-1.225-0.629-2.884-1.93-2.587-2.173c7.636,2.851,15.522,2.158,22.128-3.137c1.682-1.31,3.518-3.537,4.049-3.567 c-0.799,1.202,0.137,0.578-0.477,1.639c1.672-2.701-0.729-1.1,1.73-4.664l0.908,1.25c-0.34-2.244,2.785-4.966,2.467-8.512 c0.717-1.084,0.799,1.168,0.039,3.662c1.055-2.767,0.279-3.212,0.549-5.496c0.291,0.768,0.678,1.583,0.875,2.394 c-0.688-2.675,0.703-4.503,1.049-6.058c-0.342-0.15-1.061,1.182-1.227-1.976c0.025-1.372,0.383-0.719,0.52-1.057 c-0.268-0.155-0.975-1.207-1.404-3.224c0.309-0.475,0.832,1.229,1.256,1.298c-0.273-1.603-0.742-2.826-0.762-4.057 c-1.24-2.59-0.439,0.346-1.443-1.112c-1.32-4.114,1.094-0.955,1.258-2.823c1.998,2.895,3.137,7.385,3.662,9.244 c-0.4-2.267-1.045-4.464-1.834-6.589c0.609,0.257-0.979-4.663,0.791-1.405c-1.889-6.945-8.078-13.435-13.773-16.479 c0.695,0.637,1.574,1.437,1.26,1.563c-2.834-1.685-2.336-1.818-2.742-2.53c-2.305-0.939-2.459,0.077-3.984,0.002 c-4.35-2.308-5.188-2.063-9.191-3.507l0.182,0.852c-2.881-0.96-3.357,0.362-6.47,0.002c-0.189-0.147,0.998-0.536,1.976-0.677 c-2.786,0.368-2.656-0.55-5.382,0.101c0.671-0.471,1.383-0.784,2.099-1.184c-2.271,0.138-5.424,1.322-4.451,0.244 c-3.705,1.654-10.286,3.975-13.979,7.438l-0.116-0.776c-1.692,2.031-7.379,6.066-7.832,8.699l-0.453,0.105 c-0.879,1.491-1.45,3.18-2.148,4.713c-1.151,1.963-1.688,0.756-1.524,1.064c-2.265,4.592-3.392,8.45-4.363,11.616 c0.692,1.035,0.017,6.232,0.278,10.391c-1.136,20.544,14.418,40.489,31.42,45.093c2.492,0.893,6.197,0.861,9.349,0.949 c-3.718-1.064-4.198-0.563-7.822-1.826c-2.613-1.232-3.185-2.637-5.037-4.244l0.733,1.295c-3.63-1.285-2.111-1.59-5.065-2.525 l0.783-1.021c-1.177-0.09-3.117-1.982-3.647-3.033l-1.288,0.051c-1.546-1.906-2.371-3.283-2.31-4.35l-0.416,0.742 c-0.471-0.809-5.691-7.158-2.983-5.68c-0.503-0.458-1.172-0.747-1.897-2.066l0.551-0.629c-1.301-1.677-2.398-3.826-2.314-4.542 c0.695,0.938,1.177,1.114,1.655,1.275c-3.291-8.164-3.476-0.449-5.967-8.31l0.526-0.042c-0.403-0.611-0.65-1.27-0.974-1.919 l0.23-2.285c-2.368-2.736-0.662-11.645-0.319-16.53c0.235-1.986,1.977-4.101,3.3-7.418l-0.806-0.138 c1.542-2.688,8.802-10.799,12.166-10.383c1.629-2.046-0.324-0.008-0.643-0.522c3.579-3.703,4.704-2.616,7.119-3.283 c2.603-1.545-2.235,0.604-1.001-0.589c4.503-1.149,3.19-2.614,9.063-3.197c0.62,0.352-1.437,0.544-1.953,1.001 c3.75-1.836,11.869-1.417,17.145,1.018c6.117,2.861,12.994,11.314,13.266,19.267l0.309,0.083 c-0.156,3.162,0.484,6.819-0.627,10.177L81.762,38.962"/>
+                  <path d="M44.658,49.695l-0.211,1.047c0.983,1.335,1.763,2.781,3.016,3.821 C46.561,52.804,45.892,52.077,44.658,49.695"/>
+                  <path d="M46.979,49.605c-0.52-0.576-0.826-1.268-1.172-1.956 c0.33,1.211,1.006,2.252,1.633,3.312L46.979,49.605"/>
+                  <path d="M88.063,40.675l-0.219,0.552c-0.402,2.858-1.273,5.686-2.605,8.309 C86.711,46.769,87.66,43.742,88.063,40.675"/>
+                  <path d="M55.598,0.446C56.607,0.077,58.08,0.243,59.154,0c-1.398,0.117-2.789,0.187-4.162,0.362 L55.598,0.446"/>
+                  <path d="M20.127,19.308c0.233,2.154-1.62,2.991,0.41,1.569 C21.627,18.423,20.113,20.2,20.127,19.308"/>
+                  <path d="M17.739,29.282c0.469-1.437,0.553-2.299,0.732-3.132 C17.178,27.804,17.875,28.157,17.739,29.282"/>
+                  <path d="M66.926,111.533l-3.838,3.836l-3.836-3.836l3.836-3.836L66.926,111.533"/>
+                </g>
+                <!-- debian Official Typography Wordmark -->
+                <g fill="#f1f5f9">
+                  <path d="M13.437,125.506c-0.045,0.047-0.045,7.506-0.138,9.453c-0.092,1.574-0.232,4.957-3.568,4.957 c-3.429,0-4.263-3.939-4.541-5.652c-0.324-1.9-0.324-3.477-0.324-4.17c0-2.225,0.139-8.436,5.375-8.436 c1.576,0,2.456,0.465,3.151,0.834L13.437,125.506z M0,130.975c0,13.066,6.951,13.066,7.97,13.066 c2.873,0,4.727-1.576,5.514-4.309l0.093,4.123c0.881-0.047,1.761-0.139,3.197-0.139c0.51,0,0.926,0,1.298,0.047 c0.371,0,0.741,0.045,1.158,0.092c-0.741-1.482-1.297-4.818-1.297-12.049c0-7.043,0-18.951,0.602-22.566 c-1.667,0.789-3.105,1.299-6.256,1.576c1.251,1.344,1.251,2.039,1.251,8.154c-0.879-0.277-1.992-0.602-3.892-0.602 C1.344,118.369,0,125.598,0,130.975"/>
+                  <path d="M25.13,128.609c0.047-3.846,0.835-7.275,4.124-7.275c3.615,0,3.891,3.984,3.799,7.275H25.13z M37.64,129.074c0-5.422-1.065-10.752-7.923-10.752c-9.452,0-9.452,10.475-9.452,12.697c0,9.406,4.216,13.113,11.306,13.113 c3.149,0,4.68-0.461,5.514-0.695c-0.046-1.668,0.185-2.734,0.465-4.17c-0.975,0.604-2.226,1.391-5.006,1.391 c-7.229,0-7.322-6.582-7.322-8.852H37.55L37.64,129.074"/>
+                  <path d="M52.715,131.066c0,4.309-0.787,10.102-6.162,10.102c-0.742,0-1.668-0.141-2.27-0.279 c-0.093-1.668-0.093-4.541-0.093-7.877c0-3.986,0.416-6.068,0.742-7.09c0.972-3.289,3.15-3.334,3.566-3.334 C52.02,122.588,52.715,127.453,52.715,131.066z M39.417,136.117c0,3.43,0,5.375-0.556,6.857c1.9,0.742,4.262,1.158,7.09,1.158 c1.807,0,7.043,0,9.869-5.791c1.344-2.688,1.807-6.303,1.807-9.037c0-1.668-0.186-5.328-1.529-7.646 c-1.296-2.176-3.382-3.289-5.605-3.289c-4.449,0-5.746,3.707-6.44,5.607c0-2.363,0.045-10.611,0.415-14.828 c-3.011,1.391-4.866,1.621-6.857,1.807c1.807,0.74,1.807,3.801,1.807,13.764V136.117"/>
+                  <path d="M66.535,143.855c-0.928-0.139-1.578-0.232-2.922-0.232c-1.48,0-2.502,0.094-3.566,0.232 c0.463-0.881,0.648-1.299,0.787-4.309c0.186-4.125,0.232-15.154-0.092-17.471c-0.232-1.762-0.648-2.039-1.297-2.502 c3.799-0.371,4.865-0.648,6.625-1.482c-0.369,2.037-0.418,3.059-0.418,6.162C65.561,140.242,65.514,141.955,66.535,143.855"/>
+                  <path d="M81.373,130.74c-0.092,2.92-0.139,4.959-0.928,6.58c-0.973,2.086-2.594,2.688-3.799,2.688 c-2.783,0-3.383-2.316-3.383-4.586c0-4.355,3.893-4.682,5.652-4.682H81.373z M68.629,136.441c0,2.92,0.881,5.838,3.477,7.09 c1.158,0.51,2.316,0.51,2.688,0.51c4.264,0,5.699-3.152,6.58-5.098c-0.047,2.039,0,3.289,0.139,4.912 c0.834-0.047,1.668-0.139,3.059-0.139c0.787,0,1.529,0.092,2.316,0.139c-0.51-0.787-0.787-1.252-0.928-3.059 c-0.092-1.76-0.092-3.521-0.092-5.977l0.047-9.453c0-3.523-0.928-6.998-7.879-6.998c-4.586,0-7.273,1.391-8.617,2.086 c0.557,1.02,1.02,1.898,1.436,3.893c1.809-1.576,4.172-2.41,6.58-2.41c3.848,0,3.848,2.549,3.848,6.162 c-0.881-0.045-1.623-0.137-2.875-0.137C72.521,127.963,68.629,130.23,68.629,136.441"/>
+                  <path d="M108.063,139.268c0.047,1.576,0.047,3.244,0.695,4.588c-1.021-0.092-1.623-0.232-3.521-0.232 c-1.113,0-1.715,0.094-2.596,0.232c0.184-0.602,0.279-0.834,0.371-1.623c0.139-1.064,0.232-4.633,0.232-5.885v-5.004 c0-2.178,0-5.33-0.141-6.441c-0.092-0.787-0.322-2.918-3.012-2.918c-2.641,0-3.521,1.945-3.846,3.521 c-0.369,1.621-0.369,3.383-0.369,10.24c0.045,5.932,0.045,6.486,0.508,8.109c-0.787-0.092-1.76-0.184-3.15-0.184 c-1.113,0-1.854,0.045-2.779,0.184c0.324-0.742,0.51-1.113,0.602-3.707c0.094-2.549,0.279-15.061-0.141-18.025 c-0.23-1.809-0.695-2.225-1.203-2.688c3.754-0.186,4.957-0.789,6.117-1.389v4.91c0.555-1.438,1.713-4.635,6.348-4.635 c5.793,0,5.838,4.217,5.885,6.996V139.268"/>
+                </g>
+              </g>
+              <!-- Center: Clean Minimalist Plus (+) -->
+              <text x="175" y="105" text-anchor="middle" fill="#64748b" font-size="34" font-family="-apple-system, sans-serif" font-weight="300">+</text>
+              <!-- Right: Arvor Pine Tree & Stylized Wordmark -->
+              <g transform="translate(225, 20)">
+                <polygon points="45,10 70,48 45,40" fill="url(#arvT1)" opacity="0.95"/>
+                <polygon points="45,10 20,48 45,40" fill="url(#arvT1)" opacity="0.75"/>
+                <polygon points="45,40 85,88 45,78" fill="url(#arvT2)" opacity="0.95"/>
+                <polygon points="45,40 5,88 45,78" fill="url(#arvT2)" opacity="0.75"/>
+                <polygon points="45,78 100,132 45,118" fill="url(#arvT3)" opacity="0.95"/>
+                <polygon points="45,78 -10,132 45,118" fill="url(#arvT3)" opacity="0.75"/>
+                <polygon points="37,118 53,118 55,142 35,142" fill="#475569"/>
+                <text x="45" y="170" text-anchor="middle" fill="#f1f5f9" font-size="16" font-family="-apple-system, sans-serif" font-weight="800" letter-spacing="3">ARVOR</text>
+              </g>
+            </svg>"""
+        ]
+
+        # Ubuntu-style Dark Hero Showcase Banner
+        self.slide_card = QFrame()
+        self.slide_card.setStyleSheet("""
+            QFrame#showcase_banner {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0a1120, stop:0.45 #132238, stop:1 #0c182b);
+                border: 1px solid #1e293b;
+                border-radius: 18px;
+            }
+        """)
+        self.slide_card.setObjectName("showcase_banner")
+        self.slide_card.setFixedHeight(290)
+
+        banner_main_layout = QVBoxLayout(self.slide_card)
+        banner_main_layout.setContentsMargins(15, 20, 15, 14)
+
+        center_h_layout = QHBoxLayout()
+        center_h_layout.setSpacing(12)
+
+        # Left Nav Arrow Button
+        self.btn_slide_prev = QPushButton("❮")
+        self.btn_slide_prev.setFixedSize(36, 36)
+        self.btn_slide_prev.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_slide_prev.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #e2e8f0;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 18px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.22);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_slide_prev.clicked.connect(self.prev_slide)
+        center_h_layout.addWidget(self.btn_slide_prev, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Left Text Layout
+        text_layout = QVBoxLayout()
+        text_layout.setContentsMargins(15, 10, 10, 10)
+        text_layout.setSpacing(10)
+
+        self.lbl_slide_title = QLabel()
+        self.lbl_slide_title.setStyleSheet("font-size: 20px; font-weight: 700; color: #ffffff; line-height: 1.3;")
+        self.lbl_slide_title.setWordWrap(True)
+
+        self.lbl_slide_desc = QLabel()
+        self.lbl_slide_desc.setStyleSheet("font-size: 13.5px; color: #94a3b8; line-height: 1.6;")
+        self.lbl_slide_desc.setWordWrap(True)
+
+        text_layout.addWidget(self.lbl_slide_title)
+        text_layout.addWidget(self.lbl_slide_desc)
+        text_layout.addStretch()
+
+        center_h_layout.addLayout(text_layout, 6)
+
+        # Right Hero Graphic
+        self.lbl_slide_art = QLabel()
+        self.lbl_slide_art.setFixedSize(300, 240)
+        self.lbl_slide_art.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center_h_layout.addWidget(self.lbl_slide_art, 5, Qt.AlignmentFlag.AlignVCenter)
+
+        # Right Nav Arrow Button
+        self.btn_slide_next = QPushButton("❯")
+        self.btn_slide_next.setFixedSize(36, 36)
+        self.btn_slide_next.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_slide_next.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #e2e8f0;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                border-radius: 18px;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 0.22);
+                border-color: #38bdf8;
+                color: #ffffff;
+            }
+        """)
+        self.btn_slide_next.clicked.connect(self.next_slide)
+        center_h_layout.addWidget(self.btn_slide_next, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        banner_main_layout.addLayout(center_h_layout, 1)
+
+        # Bottom Dot Indicator
+        dots_layout = QHBoxLayout()
+        dots_layout.setSpacing(8)
+        dots_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.slide_dots = []
+        for i in range(5):
+            dot = QFrame()
+            dot.setFixedSize(8, 8)
+            dot.setStyleSheet("background:rgba(255,255,255,0.25); border-radius:4px;")
+            self.slide_dots.append(dot)
+            dots_layout.addWidget(dot)
+
+        banner_main_layout.addLayout(dots_layout)
+
+        self.slides = [
+            {"title_key": "slide1_title", "desc_key": "slide1_desc"},
+            {"title_key": "slide2_title", "desc_key": "slide2_desc"},
+            {"title_key": "slide3_title", "desc_key": "slide3_desc"},
+            {"title_key": "slide4_title", "desc_key": "slide4_desc"},
+            {"title_key": "slide5_title", "desc_key": "slide5_desc"}
+        ]
+        self.current_slide_idx = 0
+        self.update_slide_ui()
+
+        self.slide_timer = QTimer(self)
+        self.slide_timer.timeout.connect(self.next_slide)
+
+        self.lbl_status = QLabel(self.t("installing_prep"))
+        self.lbl_status.setStyleSheet("font-size:13px; color:#475569; font-weight:500; margin-top:10px;")
 
         self.pbar = QProgressBar()
         self.pbar.setRange(0, 100)
         self.pbar.setValue(0)
 
+        self.btn_toggle_log = QPushButton(self.t("view_log"))
+        self.btn_toggle_log.setStyleSheet("QPushButton{border:none; background:transparent; color:#4a78ff; font-weight:600; font-size:12px; text-align:left; padding:4px 0;} QPushButton:hover{color:#3868ef;}")
+        self.btn_toggle_log.setCursor(Qt.CursorShape.PointingHandCursor)
+
         self.txt_log = QTextEdit()
         self.txt_log.setProperty("log", "true")
         self.txt_log.setReadOnly(True)
+        self.txt_log.hide()
 
+        def toggle_log():
+            if self.txt_log.isVisible():
+                self.txt_log.hide()
+                self.btn_toggle_log.setText(self.t("view_log"))
+            else:
+                self.txt_log.show()
+                self.btn_toggle_log.setText(self.t("hide_log"))
+
+        self.btn_toggle_log.clicked.connect(toggle_log)
+
+        l.addWidget(self.slide_card)
+        l.addWidget(self.lbl_status)
         l.addWidget(self.pbar)
-        l.addSpacing(25)
+        l.addWidget(self.btn_toggle_log)
         l.addWidget(self.txt_log)
-        w.setLayout(l)
+        l.addStretch()
         return w
 
     def create_finish_page(self):
@@ -1311,7 +1996,18 @@ class InstallerGUI(QMainWindow):
         elif idx == 3:
             self.conf["de_name"] = self.c_de.currentText()
             self.conf["de_pkgs"] = self.c_de.currentData()
+            extra_list = []
+            if hasattr(self, 'chk_firefox') and self.chk_firefox.isChecked(): extra_list.append("firefox-esr")
+            if hasattr(self, 'chk_chromium') and self.chk_chromium.isChecked(): extra_list.append("chromium")
+            if hasattr(self, 'chk_office') and self.chk_office.isChecked(): extra_list.append("libreoffice libreoffice-gtk3")
+            if hasattr(self, 'chk_vlc') and self.chk_vlc.isChecked(): extra_list.append("vlc")
+            if hasattr(self, 'chk_nvidia') and self.chk_nvidia.isChecked(): extra_list.append("nvidia-driver")
+            if hasattr(self, 'chk_firmware') and self.chk_firmware.isChecked(): extra_list.append("firmware-linux-nonfree")
+            self.conf["extra_pkgs"] = " ".join(extra_list)
         elif idx == 4:
+            if hasattr(self, 'c_swap'):
+                self.conf["swap_mode"] = self.c_swap.currentData() or "zram"
+        elif idx == 5:
             if self.c_disk.currentIndex() == -1:
                 QMessageBox.warning(self, "Error", self.t("err_disk"))
                 return False
@@ -1321,7 +2017,8 @@ class InstallerGUI(QMainWindow):
             self.conf["disk"] = self.c_disk.currentData()
             self.conf["luks"] = self.chk_luks.isChecked()
             self.conf["luks_pass"] = self.i_luks_p.text()
-        elif idx == 5:
+        elif idx == 6:
+            display_name = self.i_display_name.text().strip()
             user = self.i_user.text().strip()
             host = self.i_host.text().strip()
             if not user or not host:
@@ -1331,6 +2028,7 @@ class InstallerGUI(QMainWindow):
             if not p1 or p1 != p2:
                 QMessageBox.warning(self, "Error", self.t("err_pass"))
                 return False
+            self.conf["display_name"] = display_name or user
             self.conf["user"] = user
             self.conf["hostname"] = host
             self.conf["pass"] = p1
@@ -1343,16 +2041,16 @@ class InstallerGUI(QMainWindow):
         idx = self.stack.currentIndex()
         if not self.validate_current_page(): return
 
-        if idx == 5:
+        if idx == 6:
             self.populate_summary()
             self.btn_next.setText(self.t("install"))
             self.btn_next.setIcon(self.get_nav_icon("install_btn"))
             self.btn_next.setProperty("primary", "true")
             self.apply_styles()
-        elif idx == 6:
+        elif idx == 7:
             self.start_install()
             return
-        elif idx == 8:
+        elif idx == 9:
             Sys.run("reboot")
             sys.exit(0)
 
@@ -1360,7 +2058,7 @@ class InstallerGUI(QMainWindow):
         self.btn_back.setEnabled(True)
         self.update_sidebar()
 
-        if self.stack.currentIndex() not in (6, 8):
+        if self.stack.currentIndex() not in (7, 9):
             self.btn_next.setText(self.t("next"))
             self.btn_next.setIcon(self.get_nav_icon("next"))
             self.btn_next.setProperty("primary", "true")
@@ -1378,24 +2076,37 @@ class InstallerGUI(QMainWindow):
             if self.stack.currentIndex() == 0:
                 self.btn_back.setEnabled(False)
 
+    def on_log_msg(self, msg):
+        if hasattr(self, 'lbl_status') and msg:
+            line = msg.strip().split('\n')[-1]
+            if len(line) > 70:
+                line = line[:67] + "..."
+            self.lbl_status.setText(line)
+
     def start_install(self):
-        self.stack.setCurrentIndex(7)
+        self.stack.setCurrentIndex(8)
         self.update_sidebar()
         self.nav_container.hide()
+        if hasattr(self, 'slide_timer'):
+            self.slide_timer.start(5000)
 
         self.worker = InstallWorker(self.conf, self.sys_locale)
         self.worker.log_msg.connect(self.txt_log.append)
+        self.worker.log_msg.connect(self.on_log_msg)
         self.worker.progress.connect(self.update_progress)
         self.worker.finished.connect(self.install_done)
         self.worker.start()
 
     def install_done(self, success):
+        if hasattr(self, 'slide_timer'):
+            self.slide_timer.stop()
         self.pbar.setValue(100)
         if success:
-            self.stack.setCurrentIndex(8)
+            self.stack.setCurrentIndex(9)
             self.nav_container.show()
             self.btn_back.hide()
             self.btn_next.setText(self.t("quit"))
+            self.btn_next.setIcon(self.get_nav_icon("check_btn"))
             self.btn_next.setIcon(self.get_nav_icon("check_btn"))
             self.btn_next.setProperty("primary", "true")
             self.apply_styles()

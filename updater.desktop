@@ -1,10 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=NextFerret Updater
-Comment=Update NextFerretOS
+Name=Arvor Linux Updater
+Comment=Update Arvor Linux System & Packages
 Exec=pkexec /usr/bin/nextferret-updater
-Icon=/usr/share/icons/hicolor/4000x4000/distributor-logo.png
+Icon=system-software-update
 Terminal=true
-Categories=Utility;
-
-
+Categories=System;Utility;
