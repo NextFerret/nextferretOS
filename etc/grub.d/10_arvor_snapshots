@@ -1,0 +1,92 @@
+#!/bin/sh
+# /etc/grub.d/10_arvor_snapshots
+# Dynamically generates GRUB recovery menu entries for Arvor Thin LVM snapshots (root_b / root_c).
+
+set -e
+
+prefix="/usr"
+exec_prefix="${prefix}"
+datarootdir="${prefix}/share"
+
+if [ -f "${datarootdir}/grub/grub-mkconfig_lib" ]; then
+    . "${datarootdir}/grub/grub-mkconfig_lib"
+elif [ -f "/usr/lib/grub/grub-mkconfig_lib" ]; then
+    . "/usr/lib/grub/grub-mkconfig_lib"
+fi
+
+# Detect LVM root device and VG
+ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*\]//')
+if [ -z "$ROOT_DEV" ] || ! command -v lvs >/dev/null 2>&1; then
+    exit 0
+fi
+
+VG_NAME=$(lvs --noheadings -o vg_name "$ROOT_DEV" 2>/dev/null | tr -d ' ' || true)
+if [ -z "$VG_NAME" ]; then
+    exit 0
+fi
+
+# Find latest kernel and initrd in /boot
+KERNEL=$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -V | tail -n 1 || true)
+INITRD=$(ls -1 /boot/initrd.img-* 2>/dev/null | sort -V | tail -n 1 || true)
+
+if [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
+    exit 0
+fi
+
+KERNEL_REL=$(basename "$KERNEL" | sed 's/^vmlinuz-//')
+
+# Check if root_b or root_c exist
+HAS_B=false
+HAS_C=false
+if lvs "/dev/$VG_NAME/root_b" >/dev/null 2>&1; then HAS_B=true; fi
+if lvs "/dev/$VG_NAME/root_c" >/dev/null 2>&1; then HAS_C=true; fi
+
+if [ "$HAS_B" = "false" ] && [ "$HAS_C" = "false" ]; then
+    exit 0
+fi
+
+echo "Found Arvor recovery snapshots in $VG_NAME: root_b=$HAS_B, root_c=$HAS_C" >&2
+
+cat << 'EOF'
+submenu 'Arvor Linux - Atomic Recovery Snapshots' --class arvor --class gnu-linux --class os {
+EOF
+
+if [ "$HAS_B" = "true" ]; then
+    cat << EOF
+    menuentry 'Arvor Linux (Rollback to Snapshot root_b - Last Stable Boot)' --class arvor --class gnu-linux --class os {
+        load_video
+        insmod gzio
+        insmod part_gpt
+        insmod part_msdos
+        insmod lvm
+        insmod ext2
+        insmod xfs
+        echo 'Loading Linux $KERNEL_REL from snapshot root_b...'
+        linux $KERNEL root=/dev/$VG_NAME/root_b ro quiet splash rd.lvm.lv=$VG_NAME/root_b
+        echo 'Loading initial ramdisk...'
+        initrd $INITRD
+    }
+EOF
+fi
+
+if [ "$HAS_C" = "true" ]; then
+    cat << EOF
+    menuentry 'Arvor Linux (Rollback to Snapshot root_c - Fallback Boot)' --class arvor --class gnu-linux --class os {
+        load_video
+        insmod gzio
+        insmod part_gpt
+        insmod part_msdos
+        insmod lvm
+        insmod ext2
+        insmod xfs
+        echo 'Loading Linux $KERNEL_REL from snapshot root_c...'
+        linux $KERNEL root=/dev/$VG_NAME/root_c ro quiet splash rd.lvm.lv=$VG_NAME/root_c
+        echo 'Loading initial ramdisk...'
+        initrd $INITRD
+    }
+EOF
+fi
+
+cat << 'EOF'
+}
+EOF

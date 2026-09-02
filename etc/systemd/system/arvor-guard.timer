@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic Check for Arvor Thin Pool Capacity
+Documentation=https://github.com/NextFerret/arvor
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,24 @@
+#!/bin/bash
+# /usr/bin/arvor-boot-success
+# Marks the current boot as fully operational and healthy.
+
+set -e
+
+# 1. Create the runtime indicator requested in /run
+mkdir -p /run
+touch /run/bootisok
+echo "[Arvor] Marked runtime /run/bootisok as OK."
+
+# 2. Create persistent disk indicator
+mkdir -p /var/lib/arvor
+touch /var/lib/arvor/bootisok
+
+# 3. Add atomic LVM metadata tag to root LV
+ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*\]//')
+
+if [ -n "$ROOT_DEV" ] && lvs "$ROOT_DEV" >/dev/null 2>&1; then
+    lvchange --addtag boot_ok "$ROOT_DEV" >/dev/null 2>&1 || true
+    echo "[Arvor] Added 'boot_ok' LVM metadata tag to $ROOT_DEV."
+fi
+
+exit 0
