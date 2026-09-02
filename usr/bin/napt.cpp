@@ -111,6 +111,14 @@ static bool assume_yes = false;
 static bool g_enable_seccomp = true;
 static std::atomic<bool> sandbox_created_and_mounted(false);
 
+// Forward declarations for LVM/root-device helpers (defined later in this file,
+// but used earlier by create_snapshot()).
+static string get_root_device();
+static string get_root_fstype();
+static string get_vg_name(const string& lv_path);
+static bool is_lv_thin(const string& lv_path);
+static double get_vg_free_gb(const string& vg_name);
+
 class ChrootSeccompManager {
 public:
     static bool apply_filter(string& err_out) {
