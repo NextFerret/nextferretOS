@@ -282,6 +282,7 @@ struct NaptRepoMetadata {
     string release;
     map<string, pair<string, string>> packages;
     vector<string> required_packages;
+    map<string, string> replaces;
 };
 
 struct NaptPackageCandidate {
@@ -291,6 +292,9 @@ struct NaptPackageCandidate {
     string file_name;
     string version;
     string sha256;
+    string actual_pkg_name;
+    string original_query_name;
+    bool is_replacement = false;
 };
 
 struct AptPackageState {
@@ -315,28 +319,41 @@ bool nf_tree_available() {
 }
 
 void show_help() {
-    cout << "New Advanced Packaging Tool - napt 4.0\n\n"
-         << "Usage: napt [command] [options]\n\n"
-         << "Commands:\n"
-         << "  install          Install packages or local .deb files. Tested in a chroot before being applied to the host.\n"
-         << "  remove           Remove packages. Tested in a chroot before being applied to the host.\n"
-         << "  purge            Remove packages along with their configuration files.\n"
-         << "  upgrade          Upgrade all packages, or the specified packages.\n"
-         << "  dist-upgrade     Perform a full release upgrade.\n"
-         << "  search           Search available packages by name. Use -p <page> to paginate.\n"
-         << "  sync             Refresh repository metadata.\n"
-         << "  clean            Clear the Napt package cache.\n"
-         << "  autoclean        Clear obsolete packages from the Napt download cache.\n\n"
-         << "Options:\n"
-         << "  --apply-host     Skip the chroot test and apply changes directly to the host.\n"
-         << "  --no-seccomp     Disable SECCOMP syscall filtering inside the chroot sandbox.\n"
-         << "  -p <page>        Show a specific page of search results (used with search).\n"
-         << "  --v              Show version information.\n"
-         << "  --vb             Enable verbose logging for libapt transactions.\n"
-         << "  -h               Show this help message.\n\n"
-         << "Napt repositories are configured in /etc/napt/sources.list (one per line)\n"
-         << "and/or as individual files under /etc/napt/sources.list.d/.\n\n"
-         << "                 This napt Has Super Cow Powers.\n";
+    string cyan = "\033[1;36m";
+    string green = "\033[1;32m";
+    string yellow = "\033[1;33m";
+    string bold = "\033[1m";
+    string reset = "\033[0m";
+
+    cout << cyan << bold << "New Advanced Packaging Tool (NAPT) - Version 4.1" << reset << "\n";
+    cout << "Atomic, Transactional & Hardened Package Management for Arvor Linux\n\n";
+    cout << bold << "Usage:" << reset << " napt [command] [packages/options]\n\n";
+    cout << bold << "Core Transaction Commands:" << reset << "\n";
+    cout << "  " << green << "install" << reset << " <pkgs...>       Install packages or local .deb archives (sandbox-verified)\n";
+    cout << "  " << green << "remove" << reset << " <pkgs...>        Safely remove packages from the system\n";
+    cout << "  " << green << "purge" << reset << " <pkgs...>         Remove packages along with all configuration files\n";
+    cout << "  " << green << "upgrade" << reset << " [pkgs...]      Upgrade all or specified packages transactionally\n";
+    cout << "  " << green << "dist-upgrade" << reset << "          Perform a complete system release distribution upgrade\n";
+    cout << "  " << green << "rollback" << reset << "              Revert the last transaction using pre-transaction snapshot\n\n";
+    cout << bold << "Query & Inspection Commands:" << reset << "\n";
+    cout << "  " << yellow << "search" << reset << " <term> [-p N]   Search package index by keyword with pagination\n";
+    cout << "  " << yellow << "info" << reset << " <pkg>             Display detailed package origin, version, SHA256 & replaces\n";
+    cout << "  " << yellow << "why" << reset << " <pkg>              Explain why a package is installed (reverse dependency tree)\n";
+    cout << "  " << yellow << "depends" << reset << " <pkg>          List forward dependencies (Depends, Recommends, Suggests)\n";
+    cout << "  " << yellow << "list" << reset << "                 List all currently installed packages on the system\n";
+    cout << "  " << yellow << "stats" << reset << "                Display repository, package count and cache disk usage\n";
+    cout << "  " << yellow << "history" << reset << "              Display recent package transaction history log\n\n";
+    cout << bold << "Maintenance Commands:" << reset << "\n";
+    cout << "  sync                 Refresh repository metadata concurrently with SHA256 validation\n";
+    cout << "  clean                Clear the entire NAPT package download cache\n";
+    cout << "  autoclean            Clear obsolete and stale packages from cache\n\n";
+    cout << bold << "Transaction Flags:" << reset << "\n";
+    cout << "  --apply-host         Skip sandbox test and apply transaction directly to host\n";
+    cout << "  --no-seccomp         Disable BPF SECCOMP syscall filtering inside sandbox\n";
+    cout << "  -y, --yes            Assume yes to all confirmation prompts\n";
+    cout << "  --vb                 Enable verbose debug logging for transactions\n";
+    cout << "  -h, --help           Show this comprehensive help screen\n\n";
+    cout << "                 This napt Has Super Cow Powers.\n";
 }
 
 static bool wait_for_child(pid_t pid, int& status) {
@@ -474,8 +491,16 @@ static string exec_argv_capture(const vector<string>& args) {
 }
 
 bool create_snapshot(const string& name) {
-    if (!nf_tree_available()) return false;
-    return exec_argv_devnull_out({NF_TREE_BIN, "create", name}) == 0;
+    if (nf_tree_available()) {
+        if (exec_argv_devnull_out({NF_TREE_BIN, "create", name}) == 0) return true;
+    }
+    string root_dev = get_root_device();
+    string vg_name = get_vg_name(root_dev);
+    if (!root_dev.empty() && !vg_name.empty()) {
+        string snap_name = name + "_" + to_string(time(nullptr));
+        return exec_argv_devnull_out({"lvcreate", "-s", "--name", snap_name, "-k", "n", root_dev}) == 0;
+    }
+    return false;
 }
 
 enum class PrecheckResult { Proceed, NoChanges, Failed };
@@ -1105,9 +1130,11 @@ bool read_text_file(const string& path, string& content) {
 bool parse_napt_repo_metadata(const string& text, NaptRepoMetadata& metadata) {
     metadata.packages.clear();
     metadata.required_packages.clear();
+    metadata.replaces.clear();
     string line;
     bool in_packages = false;
     bool in_required = false;
+    bool in_replaces = false;
     stringstream ss(text);
     while (getline(ss, line)) {
         string trimmed = trim_copy(line);
@@ -1116,8 +1143,10 @@ bool parse_napt_repo_metadata(const string& text, NaptRepoMetadata& metadata) {
             metadata.release = trim_copy(trimmed.substr(8));
             continue;
         }
-        if (trimmed == "packages:") { in_packages = true; in_required = false; continue; }
-        if (trimmed == "required:") { in_required = true; in_packages = false; continue; }
+        if (trimmed == "packages:") { in_packages = true; in_required = false; in_replaces = false; continue; }
+        if (trimmed == "required:") { in_required = true; in_packages = false; in_replaces = false; continue; }
+        if (trimmed == "replaces:") { in_replaces = true; in_packages = false; in_required = false; continue; }
+
         if (in_required) {
             size_t start = trimmed.find('{');
             size_t end = trimmed.find('}');
@@ -1127,16 +1156,55 @@ bool parse_napt_repo_metadata(const string& text, NaptRepoMetadata& metadata) {
             }
             continue;
         }
+
+        if (in_replaces) {
+            size_t pos = trimmed.find('=');
+            if (pos != string::npos) {
+                string orig_pkg = trim_copy(trimmed.substr(0, pos));
+                string rep_pkg = trim_copy(trimmed.substr(pos + 1));
+                if (!orig_pkg.empty() && !rep_pkg.empty()) {
+                    metadata.replaces[orig_pkg] = rep_pkg;
+                }
+            }
+            continue;
+        }
+
         if (in_packages) {
             size_t pos = trimmed.find('=');
             if (pos == string::npos) continue;
             string pkg = trim_copy(trimmed.substr(0, pos));
             string rest = trim_copy(trimmed.substr(pos + 1));
             string file_name, hash;
+
+            size_t rep_pos = rest.find("replaces=");
+            if (rep_pos != string::npos) {
+                string rep_str = rest.substr(rep_pos + 9);
+                size_t rep_end = rep_str.find_first_of(" \t");
+                if (rep_end != string::npos) {
+                    rep_str = rep_str.substr(0, rep_end);
+                }
+                stringstream rep_ss(rep_str);
+                string rep_item;
+                while (getline(rep_ss, rep_item, ',')) {
+                    string clean_item = trim_copy(rep_item);
+                    if (!clean_item.empty()) {
+                        metadata.replaces[clean_item] = pkg;
+                    }
+                }
+                size_t remove_len = (rep_end != string::npos) ? (9 + rep_end) : string::npos;
+                rest = trim_copy(rest.substr(0, rep_pos) + " " + (remove_len != string::npos ? rest.substr(rep_pos + remove_len) : ""));
+            }
+
             size_t sha_pos = rest.find("sha256=");
             if (sha_pos != string::npos) {
+                string sha_str = rest.substr(sha_pos + 7);
+                size_t sha_end = sha_str.find_first_of(" \t");
+                if (sha_end != string::npos) {
+                    hash = trim_copy(sha_str.substr(0, sha_end));
+                } else {
+                    hash = trim_copy(sha_str);
+                }
                 file_name = trim_copy(rest.substr(0, sha_pos));
-                hash = trim_copy(rest.substr(sha_pos + 7));
             } else {
                 file_name = rest;
             }
@@ -1427,6 +1495,8 @@ AptPackageState get_apt_package_state(pkgCacheFile& cache_file, const string& pk
 
 NaptPackageCandidate find_best_napt_candidate(const vector<NaptRepoMetadata>& repos, const string& pkg_name) {
     NaptPackageCandidate best;
+
+    // 1. Direct package match
     for (const auto& repo : repos) {
         auto it = repo.packages.find(pkg_name);
         if (it == repo.packages.end()) continue;
@@ -1436,10 +1506,38 @@ NaptPackageCandidate find_best_napt_candidate(const vector<NaptRepoMetadata>& re
         candidate.release = repo.release;
         candidate.file_name = it->second.first;
         candidate.sha256 = it->second.second;
+        candidate.actual_pkg_name = pkg_name;
+        candidate.original_query_name = pkg_name;
+        candidate.is_replacement = false;
         candidate.version = extract_napt_version(pkg_name, candidate.file_name);
         if (!best.found || compare_versions(candidate.version, best.version) > 0)
             best = candidate;
     }
+    if (best.found) return best;
+
+    // 2. Replaces match (alias / replacement redirection)
+    for (const auto& repo : repos) {
+        auto rep_it = repo.replaces.find(pkg_name);
+        if (rep_it == repo.replaces.end()) continue;
+
+        string target_napt_pkg = rep_it->second;
+        auto it = repo.packages.find(target_napt_pkg);
+        if (it == repo.packages.end()) continue;
+
+        NaptPackageCandidate candidate;
+        candidate.found = true;
+        candidate.base_url = repo.base_url;
+        candidate.release = repo.release;
+        candidate.file_name = it->second.first;
+        candidate.sha256 = it->second.second;
+        candidate.actual_pkg_name = target_napt_pkg;
+        candidate.original_query_name = pkg_name;
+        candidate.is_replacement = true;
+        candidate.version = extract_napt_version(target_napt_pkg, candidate.file_name);
+        if (!best.found || compare_versions(candidate.version, best.version) > 0)
+            best = candidate;
+    }
+
     return best;
 }
 
@@ -1549,15 +1647,21 @@ static bool download_napt_packages(vector<PendingNaptDownload>& pending_napt_dow
             ok = false;
         } else {
             InstallDecision decision;
-            decision.package_name     = pending.pkg_name;
+            decision.package_name     = pending.candidate.actual_pkg_name.empty() ? pending.pkg_name : pending.candidate.actual_pkg_name;
             decision.apt_argument     = pending.local_path;
             decision.selected_version = pending.candidate.version;
             decision.from_napt        = true;
             decisions.push_back(decision);
             if (!quiet) {
-                safe_log("Selected ", pending.pkg_name, 
-                         (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""),
-                         " from the Napt repository.\n");
+                if (pending.candidate.is_replacement) {
+                    safe_log("Selected ", pending.candidate.actual_pkg_name, 
+                             (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""),
+                             " from the Napt repository (replacing ", pending.pkg_name, ").\n");
+                } else {
+                    safe_log("Selected ", pending.pkg_name, 
+                             (!pending.candidate.version.empty() ? " (" + pending.candidate.version + ")" : ""),
+                             " from the Napt repository.\n");
+                }
             }
         }
     }
@@ -1608,16 +1712,27 @@ bool resolve_install_decisions(const vector<string>& pkgs, vector<InstallDecisio
 
         bool use_napt = false;
         if (napt_candidate.found) {
-            if (!apt_state.found || apt_state.candidate_version.empty())
+            if (napt_candidate.is_replacement) {
                 use_napt = true;
-            else if (compare_versions(napt_candidate.version, apt_state.candidate_version) > 0)
+                if (!quiet) {
+                    cout << "Note: Package '" << pkg_name << "' is replaced by Napt package '" 
+                         << napt_candidate.actual_pkg_name << "' (replaces rule). Redirecting...\n";
+                }
+            } else if (!apt_state.found || apt_state.candidate_version.empty()) {
                 use_napt = true;
+            } else if (compare_versions(napt_candidate.version, apt_state.candidate_version) > 0) {
+                use_napt = true;
+            }
         }
 
         if (use_napt) {
             print_napt_repo_warning(napt_candidate.base_url);
-            if (apt_state.installed && compare_versions(apt_state.installed_version, napt_candidate.version) >= 0) {
-                if (!quiet) print_install_already_present_message(pkg_name, is_upgrade);
+            AptPackageState target_apt_state = (napt_candidate.is_replacement)
+                ? get_apt_package_state(cache_file, napt_candidate.actual_pkg_name)
+                : apt_state;
+
+            if (target_apt_state.installed && compare_versions(target_apt_state.installed_version, napt_candidate.version) >= 0) {
+                if (!quiet) print_install_already_present_message(napt_candidate.actual_pkg_name, is_upgrade);
                 continue;
             }
             pending_napt_downloads.push_back({pkg_name, napt_candidate, "", false, ""});
@@ -1907,6 +2022,17 @@ void perform_transaction_argv(const string& action, const vector<string>& target
     bool snapshot_created = create_snapshot("apt-pre");
     global_config_backup.apply_new();
 
+    // Preserve active kernel modules in case of kernel upgrades
+    string kver = trim_copy(exec_argv_capture({"uname", "-r"}));
+    if (!kver.empty()) {
+        string src = "/lib/modules/" + kver;
+        string dst = "/var/tmp/.arvor_kmodules_" + kver;
+        error_code ec;
+        if (fs::exists(src, ec) && !fs::exists(dst, ec)) {
+            exec_argv_devnull_out({"cp", "-a", src, dst});
+        }
+    }
+
     cout.flush();
     cerr.flush();
 
@@ -2185,6 +2311,280 @@ int run_search(const vector<string>& terms, int page) {
     return 0;
 }
 
+int show_package_info(const string& pkg_name) {
+    if (pkg_name.empty()) {
+        cout << "Usage: napt info <package_name>\n";
+        return 1;
+    }
+
+    pkgCacheFile cache_file;
+    vector<NaptRepoMetadata> repos = load_cached_napt_metadata();
+    AptPackageState apt_state = get_apt_package_state(cache_file, pkg_name);
+    NaptPackageCandidate napt_cand = find_best_napt_candidate(repos, pkg_name);
+
+    if (!apt_state.found && !napt_cand.found) {
+        cout << "Package '" << pkg_name << "' not found in any configured repository.\n";
+        return 1;
+    }
+
+    string cyan_bold = "\033[1;36m";
+    string green = "\033[1;32m";
+    string yellow = "\033[1;33m";
+    string reset = "\033[0m";
+
+    cout << cyan_bold << "Package Information: " << pkg_name << reset << "\n";
+    cout << "----------------------------------------\n";
+    cout << "Installed:     " << (apt_state.installed ? (green + "yes (" + apt_state.installed_version + ")" + reset) : "no") << "\n";
+
+    if (napt_cand.found) {
+        cout << "Napt Source:   " << napt_cand.base_url << " (" << napt_cand.release << ")\n";
+        cout << "Napt File:     " << napt_cand.file_name << "\n";
+        cout << "Napt Version:  " << napt_cand.version << "\n";
+        cout << "SHA256:        " << (napt_cand.sha256.empty() ? "None" : napt_cand.sha256) << "\n";
+        if (napt_cand.is_replacement) {
+            cout << "Replaces Rule: " << yellow << "Replaces package '" << napt_cand.original_query_name 
+                 << "' with '" << napt_cand.actual_pkg_name << "'" << reset << "\n";
+        }
+    }
+
+    if (apt_state.found && !apt_state.candidate_version.empty()) {
+        cout << "Debian Ver:    " << apt_state.candidate_version << "\n";
+    }
+
+    return 0;
+}
+
+int list_installed_packages() {
+    pkgCacheFile cache_file;
+    pkgCache* cache = cache_file.GetPkgCache();
+    if (cache == nullptr) return 1;
+
+    int count = 0;
+    for (pkgCache::PkgIterator pkg = cache->PkgBegin(); !pkg.end(); ++pkg) {
+        if (pkg->CurrentVer != 0) {
+            cout << pkg.Name() << " (" << pkg.CurrentVer().VerStr() << ")\n";
+            count++;
+        }
+    }
+    cout << "\nTotal installed packages: " << count << "\n";
+    return 0;
+}
+
+bool check_system_locks(bool quiet = false) {
+    int fd = open("/var/lib/dpkg/lock-frontend", O_RDWR | O_CREAT | O_CLOEXEC, 0640);
+    if (fd >= 0) {
+        struct flock fl;
+        fl.l_type = F_WRLCK;
+        fl.l_whence = SEEK_SET;
+        fl.l_start = 0;
+        fl.l_len = 0;
+        if (fcntl(fd, F_SETLK, &fl) == -1) {
+            close(fd);
+            if (!quiet) {
+                cout << "\033[1;31mE:\033[0m dpkg lock (/var/lib/dpkg/lock-frontend) is currently held by another process.\n";
+                cout << "Please wait for the background package operation to complete.\n";
+            }
+            return false;
+        }
+        fl.l_type = F_UNLCK;
+        fcntl(fd, F_SETLK, &fl);
+        close(fd);
+    }
+    return true;
+}
+
+int show_package_why(const string& pkg_name) {
+    if (pkg_name.empty()) {
+        cout << "Usage: napt why <package_name>\n";
+        return 1;
+    }
+    pkgCacheFile cache_file;
+    pkgCache* cache = cache_file.GetPkgCache();
+    if (cache == nullptr) return 1;
+
+    pkgCache::PkgIterator target_pkg = cache->FindPkg(pkg_name);
+    if (target_pkg.end()) {
+        cout << "Package '" << pkg_name << "' not found.\n";
+        return 1;
+    }
+
+    if (target_pkg->CurrentVer == 0) {
+        cout << "Package '" << pkg_name << "' is not currently installed.\n";
+    }
+
+    string cyan_bold = "\033[1;36m";
+    string green = "\033[1;32m";
+    string gray = "\033[38;2;148;163;184m";
+    string reset = "\033[0m";
+
+    cout << cyan_bold << "Dependency Tree (Why is '" << pkg_name << "' required?):" << reset << "\n";
+    cout << "--------------------------------------------------------\n";
+
+    int rev_count = 0;
+    set<string> seen_parents;
+
+    for (pkgCache::DepIterator dep = target_pkg.RevDependsList(); !dep.end(); ++dep) {
+        if (dep->Type != pkgCache::Dep::Depends && dep->Type != pkgCache::Dep::PreDepends) continue;
+        pkgCache::PkgIterator parent = dep.ParentPkg();
+        if (parent->CurrentVer != 0) {
+            string pname = parent.Name();
+            if (seen_parents.insert(pname).second) {
+                cout << "  " << green << "✔ " << pname << reset << " (" << parent.CurrentVer().VerStr() << ")"
+                     << gray << " [requires " << dep.DepType() << ": " << pkg_name << "]" << reset << "\n";
+                rev_count++;
+            }
+        }
+    }
+
+    if (rev_count == 0) {
+        cout << "  " << gray << "No installed packages depend on '" << pkg_name << "'. It was likely installed manually or as a top-level requirement." << reset << "\n";
+    } else {
+        cout << "\nRequired by " << rev_count << " currently installed package(s).\n";
+    }
+    return 0;
+}
+
+int show_package_depends(const string& pkg_name) {
+    if (pkg_name.empty()) {
+        cout << "Usage: napt depends <package_name>\n";
+        return 1;
+    }
+    pkgCacheFile cache_file;
+    pkgCache* cache = cache_file.GetPkgCache();
+    if (cache == nullptr) return 1;
+
+    pkgCache::PkgIterator target_pkg = cache->FindPkg(pkg_name);
+    if (target_pkg.end()) {
+        cout << "Package '" << pkg_name << "' not found.\n";
+        return 1;
+    }
+
+    pkgCache::VerIterator ver = target_pkg.CurrentVer() != 0 ? target_pkg.CurrentVer() : target_pkg.VersionList();
+    if (ver.end()) {
+        cout << "No versions available for package '" << pkg_name << "'.\n";
+        return 1;
+    }
+
+    string cyan_bold = "\033[1;36m";
+    string green = "\033[1;32m";
+    string yellow = "\033[1;33m";
+    string reset = "\033[0m";
+
+    cout << cyan_bold << "Direct Dependencies for '" << pkg_name << "' (" << ver.VerStr() << "):" << reset << "\n";
+    cout << "--------------------------------------------------------\n";
+
+    for (pkgCache::DepIterator dep = ver.DependsList(); !dep.end(); ++dep) {
+        string type_name = dep.DepType();
+        string target_name = dep.TargetPkg().Name();
+        string color = (type_name == "Depends" || type_name == "PreDepends") ? green : yellow;
+        cout << "  " << color << type_name << ": " << reset << target_name;
+        if (dep.TargetVer() != nullptr) cout << " (" << dep.CompType() << " " << dep.TargetVer() << ")";
+        cout << "\n";
+    }
+    return 0;
+}
+
+int show_history() {
+    cout << "\033[1;36m=== NAPT Transaction History ===\033[0m\n\n";
+    string log_path = "/var/log/dpkg.log";
+    if (!fs::exists(log_path)) {
+        cout << "No package history log found at " << log_path << ".\n";
+        return 0;
+    }
+
+    ifstream in(log_path);
+    if (!in.is_open()) {
+        cout << "Unable to open history log.\n";
+        return 1;
+    }
+
+    string line;
+    vector<string> relevant_lines;
+    while (getline(in, line)) {
+        if (line.find(" install ") != string::npos ||
+            line.find(" upgrade ") != string::npos ||
+            line.find(" remove ") != string::npos ||
+            line.find(" purge ") != string::npos) {
+            relevant_lines.push_back(line);
+        }
+    }
+
+    size_t start = (relevant_lines.size() > 25) ? (relevant_lines.size() - 25) : 0;
+    for (size_t i = start; i < relevant_lines.size(); ++i) {
+        const string& l = relevant_lines[i];
+        if (l.find(" install ") != string::npos) {
+            cout << "\033[1;32m[INSTALL]\033[0m " << l << "\n";
+        } else if (l.find(" upgrade ") != string::npos) {
+            cout << "\033[1;33m[UPGRADE]\033[0m " << l << "\n";
+        } else if (l.find(" remove ") != string::npos || l.find(" purge ") != string::npos) {
+            cout << "\033[1;31m[REMOVE]\033[0m  " << l << "\n";
+        }
+    }
+    return 0;
+}
+
+int show_stats() {
+    pkgCacheFile cache_file;
+    pkgCache* cache = cache_file.GetPkgCache();
+    vector<NaptRepoMetadata> repos = load_cached_napt_metadata();
+    vector<NaptSource> sources = load_napt_sources();
+
+    int total_pkgs = 0;
+    int installed_pkgs = 0;
+
+    if (cache != nullptr) {
+        for (pkgCache::PkgIterator pkg = cache->PkgBegin(); !pkg.end(); ++pkg) {
+            total_pkgs++;
+            if (pkg->CurrentVer != 0) installed_pkgs++;
+        }
+    }
+
+    uint64_t cache_bytes = 0;
+    error_code ec;
+    if (fs::exists(NAPT_CACHE_DIR, ec)) {
+        for (const auto& entry : fs::recursive_directory_iterator(NAPT_CACHE_DIR, ec)) {
+            if (entry.is_regular_file()) cache_bytes += entry.file_size(ec);
+        }
+    }
+
+    string cyan_bold = "\033[1;36m";
+    string green = "\033[1;32m";
+    string reset = "\033[0m";
+
+    cout << cyan_bold << "=== Arvor NAPT System & Cache Statistics ===" << reset << "\n\n";
+    cout << "  Napt Repositories Configured: " << green << sources.size() << reset << "\n";
+    cout << "  Napt Metadata Sources Loaded: " << green << repos.size() << reset << "\n";
+    cout << "  Total Package Symbols:        " << total_pkgs << "\n";
+    cout << "  Installed Packages:           " << green << installed_pkgs << reset << "\n";
+    cout << "  Napt Cache Disk Footprint:    " << format_bytes(cache_bytes) << " (" << NAPT_CACHE_DIR << ")\n";
+    cout << "  LVM Snapshot Sandbox Engine:  " << green << "Active (Thin / Thick LVM Supported)" << reset << "\n\n";
+    return 0;
+}
+
+void do_transaction_rollback() {
+    cout << "\033[1;33m==>\033[0m Querying available recovery snapshots for rollback...\n";
+    string latest_snap = get_latest_snapshot("apt-pre");
+    if (latest_snap.empty()) {
+        latest_snap = get_latest_snapshot("root-auto");
+    }
+
+    if (latest_snap.empty()) {
+        cout << "\033[1;31mE:\033[0m No automatic pre-transaction snapshots found in " << AUTO_SNAP_DIR << ".\n";
+        cout << "Hint: You can use 'arvorctl rollback b' to restore to the last boot snapshot.\n";
+        return;
+    }
+
+    cout << "Found latest pre-transaction snapshot: \033[1;32m" << latest_snap << "\033[0m\n";
+    cout << "Are you sure you want to rollback to this snapshot? Type 'yes' to proceed: ";
+    string confirm;
+    getline(cin, confirm);
+    if (confirm == "yes" || confirm == "YES") {
+        do_rollback("apt-pre");
+    } else {
+        cout << "Rollback cancelled.\n";
+    }
+}
+
 int main(int argc, char** argv) {
     setup_safety_handlers();
     pkgInitConfig(*_config);
@@ -2196,8 +2596,8 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         string arg = argv[i];
-        if (arg == "-h") { show_help(); return 0; }
-        else if (arg == "--v") { cout << "napt 4.0\n"; return 0; }
+        if (arg == "-h" || arg == "--help") { show_help(); return 0; }
+        else if (arg == "--v" || arg == "-v" || arg == "--version") { cout << "napt 4.1\n"; return 0; }
         else if (arg == "--vb") { _config->Set("Debug::pkgAcquire", "true"); }
         else if (arg == "--apply-host") { apply_host = true; }
         else if (arg == "--no-seccomp") { g_enable_seccomp = false; }
@@ -2224,7 +2624,28 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (command == "stats") {
+        return show_stats();
+    } else if (command == "history" || command == "log") {
+        return show_history();
+    } else if (command == "why") {
+        if (pkgs.empty()) { cout << "Usage: napt why <package_name>\n"; return 1; }
+        return show_package_why(pkgs[0]);
+    } else if (command == "depends" || command == "deps") {
+        if (pkgs.empty()) { cout << "Usage: napt depends <package_name>\n"; return 1; }
+        return show_package_depends(pkgs[0]);
+    } else if (command == "info" || command == "show") {
+        if (pkgs.empty()) { cout << "Usage: napt info <package_name>\n"; return 1; }
+        return show_package_info(pkgs[0]);
+    } else if (command == "list" || command == "list-installed") {
+        return list_installed_packages();
+    } else if (command == "search") {
+        return run_search(pkgs, search_page);
+    }
+
     if (geteuid() != 0) { cout << "Root privileges required.\n"; return 1; }
+
+    if (!check_system_locks()) return 1;
 
     if (command == "sync") {
         pkgCacheFile cache_file;
@@ -2243,6 +2664,8 @@ int main(int argc, char** argv) {
         return clean_napt_cache() ? 0 : 1;
     } else if (command == "autoclean") {
         return autoclean_napt_cache() ? 0 : 1;
+    } else if (command == "rollback") {
+        do_transaction_rollback();
     } else if (command == "dist-upgrade") {
 #ifdef nflinux
         do_nflinux_upgrade(apply_host);
@@ -2255,8 +2678,6 @@ int main(int argc, char** argv) {
         perform_upgrade_transaction(pkgs, apply_host);
     } else if (command == "remove" || command == "purge") {
         perform_transaction(command, pkgs, apply_host);
-    } else if (command == "search") {
-        return run_search(pkgs, search_page);
     } else {
         cout << "Unknown command: " << command << "\n";
         show_help();

@@ -1,0 +1,81 @@
+#!/bin/bash
+# /usr/bin/arvor-guard
+# Arvor Linux Thin Pool Space Guard
+# Prevents Thin LVM 100% capacity lockups by actively monitoring data usage and purging stale auto-snapshots.
+
+set -e
+
+THRESHOLD_WARN=80.0
+THRESHOLD_PURGE=85.0
+THRESHOLD_CRIT=95.0
+
+log() {
+    echo "[arvor-guard] $1"
+    logger -t arvor-guard "$1" 2>/dev/null || true
+}
+
+get_root_dev() {
+    findmnt -n -o SOURCE / 2>/dev/null | sed 's/\[.*\]//'
+}
+
+ROOT_DEV=$(get_root_dev)
+if [ -z "$ROOT_DEV" ] || ! command -v lvs >/dev/null 2>&1; then
+    exit 0
+fi
+
+if ! lvs "$ROOT_DEV" >/dev/null 2>&1; then
+    exit 0
+fi
+
+VG_NAME=$(lvs --noheadings -o vg_name "$ROOT_DEV" 2>/dev/null | tr -d ' ')
+POOL_NAME=$(lvs --noheadings -o pool_lv "$ROOT_DEV" 2>/dev/null | tr -d ' ')
+
+if [ -z "$VG_NAME" ] || [ -z "$POOL_NAME" ]; then
+    # Not a thin volume
+    exit 0
+fi
+
+# Get thin pool data usage percentage
+DATA_PERCENT=$(lvs --noheadings -o data_percent "/dev/$VG_NAME/$POOL_NAME" 2>/dev/null | tr -d ' ' || echo "0")
+DATA_NUM=$(echo "$DATA_PERCENT" | cut -d'.' -f1)
+
+if [ -z "$DATA_NUM" ]; then
+    exit 0
+fi
+
+log "Thin pool '/dev/$VG_NAME/$POOL_NAME' data occupancy: ${DATA_PERCENT}%"
+
+# Check Critical Threshold
+if [ "$DATA_NUM" -ge 95 ]; then
+    log "CRITICAL: Thin pool is at ${DATA_PERCENT}%! High risk of read-only filesystem lockup."
+    wall "[Arvor Guard CRITICAL] Storage Thin Pool is at ${DATA_PERCENT}%! Free up space immediately!" 2>/dev/null || true
+fi
+
+# Check Purge Threshold
+if [ "$DATA_NUM" -ge 85 ]; then
+    log "Occupancy exceeds ${THRESHOLD_PURGE}%. Initiating emergency garbage collection of stale auto-snapshots..."
+
+    # 1. Purge old apt-pre snapshots
+    AUTO_SNAPS=$(lvs --noheadings -o lv_name "$VG_NAME" 2>/dev/null | grep -E "apt-pre|snap_apt|root-auto" | tr -d ' ' || true)
+    
+    for snap in $AUTO_SNAPS; do
+        log "Purging auto-snapshot /dev/$VG_NAME/$snap..."
+        lvremove -f "/dev/$VG_NAME/$snap" >/dev/null 2>&1 || true
+        
+        # Re-check occupancy
+        NEW_PCT=$(lvs --noheadings -o data_percent "/dev/$VG_NAME/$POOL_NAME" 2>/dev/null | tr -d ' ' | cut -d'.' -f1 || echo "100")
+        if [ "$NEW_PCT" -lt 80 ]; then
+            log "Space recovered. Current pool data occupancy: ${NEW_PCT}%."
+            break
+        fi
+    done
+
+    # 2. If still high, purge root_c (fallback slot)
+    NEW_PCT=$(lvs --noheadings -o data_percent "/dev/$VG_NAME/$POOL_NAME" 2>/dev/null | tr -d ' ' | cut -d'.' -f1 || echo "100")
+    if [ "$NEW_PCT" -ge 85 ] && lvs "/dev/$VG_NAME/root_c" >/dev/null 2>&1; then
+        log "Pool still high (${NEW_PCT}%). Purging fallback snapshot root_c to prevent system lockup..."
+        lvremove -f "/dev/$VG_NAME/root_c" >/dev/null 2>&1 || true
+    fi
+fi
+
+exit 0

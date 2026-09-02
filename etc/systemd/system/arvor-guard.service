@@ -1,0 +1,10 @@
+[Unit]
+Description=Arvor Linux Thin Pool Space Guardian
+Documentation=https://github.com/NextFerret/arvor
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/arvor-guard
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle

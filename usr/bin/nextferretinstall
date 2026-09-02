@@ -32,12 +32,21 @@ SIMULATE = "--simulate" in sys.argv
 FILES = [
     "/usr/bin/nsm",
     "/usr/bin/napt",
+    "/usr/bin/arvorctl",
+    "/usr/bin/arvor-guard",
     "/usr/share/nextferret/credits",
     "/usr/bin/apt-nf-tree",
     "/etc/napt/sources.list",
     "/usr/bin/nlc",
     "/usr/bin/nsmd_start",
-    "/etc/nextferretinst/translations.json"
+    "/etc/nextferretinst/translations.json",
+    "/etc/initramfs-tools/hooks/arvor_lvm_rollback",
+    "/etc/initramfs-tools/scripts/local-top/arvor_lvm_snapshot",
+    "/usr/bin/arvor-boot-success",
+    "/etc/systemd/system/arvor-boot-success.service",
+    "/etc/systemd/system/arvor-guard.service",
+    "/etc/systemd/system/arvor-guard.timer",
+    "/etc/grub.d/10_arvor_snapshots"
 ]
 
 STYLES = """
@@ -633,6 +642,15 @@ case "$1" in prereqs) prereqs; exit 0;; esac
 vgchange -ay arvor_vg || true
 SCRIPT
 chmod +x /etc/initramfs-tools/scripts/local-top/activate_lvm
+
+chmod +x /etc/initramfs-tools/hooks/arvor_lvm_rollback || true
+chmod +x /etc/initramfs-tools/scripts/local-top/arvor_lvm_snapshot || true
+chmod +x /usr/bin/arvor-boot-success || true
+chmod +x /usr/bin/arvorctl || true
+chmod +x /usr/bin/arvor-guard || true
+chmod +x /etc/grub.d/10_arvor_snapshots || true
+systemctl enable arvor-boot-success.service || true
+systemctl enable arvor-guard.timer || true
 
 touch /etc/default/grub
 
