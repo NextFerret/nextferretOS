@@ -46,7 +46,7 @@ FILES = [
     "/etc/systemd/system/arvor-boot-success.service",
     "/etc/systemd/system/arvor-guard.service",
     "/etc/systemd/system/arvor-guard.timer",
-    "/etc/grub.d/10_arvor_snapshots",
+    "/etc/grub.d/10_arvor_snapshots"
     "/etc/motd"
 ]
 
@@ -658,12 +658,12 @@ touch /etc/default/grub
 sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="rd.lvm.lv=arvor_vg/root"|' /etc/default/grub || true
 grep -q "rd.lvm.lv" /etc/default/grub || echo 'GRUB_CMDLINE_LINUX="rd.lvm.lv=arvor_vg/root"' >> /etc/default/grub
 
-update-initramfs -c -k all || update-initramfs -u
-grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=arvor-linux || true
-efibootmgr -c -d {self.conf["disk"]} -p 1 -L "Arvor Linux" -l "\\EFI\\arvor-linux\\grubx64.efi" || true
-update-grub || true
 
-lvmabd_start 1 &
+update-initramfs -c -k all || update-initramfs -u
+grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=arvor-linux --removable || true
+efibootmgr -c -d {self.conf["disk"]} -p 1 -L "Arvor Linux" -l "\\EFI\\arvor-linux\\grubx64.efi" || true
+update-grub
+
 napt sync
 apt-get clean
 rm /s.sh
