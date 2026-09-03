@@ -658,8 +658,6 @@ touch /etc/default/grub
 sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="rd.lvm.lv=arvor_vg/root"|' /etc/default/grub || true
 grep -q "rd.lvm.lv" /etc/default/grub || echo 'GRUB_CMDLINE_LINUX="rd.lvm.lv=arvor_vg/root"' >> /etc/default/grub
 
-rm -rf /etc/motd
-
 update-initramfs -c -k all || update-initramfs -u
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=arvor-linux || true
 efibootmgr -c -d {self.conf["disk"]} -p 1 -L "Arvor Linux" -l "\\EFI\\arvor-linux\\grubx64.efi" || true
