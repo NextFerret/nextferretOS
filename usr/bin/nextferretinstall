@@ -46,7 +46,8 @@ FILES = [
     "/etc/systemd/system/arvor-boot-success.service",
     "/etc/systemd/system/arvor-guard.service",
     "/etc/systemd/system/arvor-guard.timer",
-    "/etc/grub.d/10_arvor_snapshots"
+    "/etc/grub.d/10_arvor_snapshots",
+    "/etc/motd"
 ]
 
 STYLES = """
