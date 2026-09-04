@@ -1443,7 +1443,7 @@ vector<NaptRepoMetadata> load_cached_napt_metadata() {
     vector<NaptRepoMetadata> repos;
     vector<NaptSource> sources = load_napt_sources();
     for (const auto& source : sources) {
-        string path = NAPT_ETC_DIR + "/" + source.release + "/repo-metadata";
+        string path = NAPT_ETC_DIR + "/" + sanitize_filename(source.release) + "/repo-metadata";
         string content;
         if (!read_text_file(path, content)) continue;
         NaptRepoMetadata metadata;
