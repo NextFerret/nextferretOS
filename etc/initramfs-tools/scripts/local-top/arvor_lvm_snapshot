@@ -38,7 +38,7 @@ show_plymouth_msg() {
 # 1. Activate LVM volumes
 if [ -x /sbin/lvm ]; then
     /sbin/lvm vgchange -ay --ignoreactivationskip >/dev/null 2>&1
-    /sbin/lvm udevadm settle >/dev/null 2>&1 || true
+    udevadm settle >/dev/null 2>&1 || true
 fi
 
 # 2. Identify Root Device / Volume Group / Logical Volume
@@ -54,10 +54,10 @@ done
 # If ROOT_DEV is UUID or PARTUUID, resolve device node
 if echo "$ROOT_DEV" | grep -q "^UUID="; then
     UUID_VAL="${ROOT_DEV#UUID=}"
-    ROOT_DEV=$(blkid -U "$UUID_VAL" 2>/dev/null || findfs "$ROOT_DEV" 2>/dev/null || echo "")
+    ROOT_DEV=$(blkid -U "$UUID_VAL" 2>/dev/null || findfs "UUID=$UUID_VAL" 2>/dev/null || echo "")
 elif echo "$ROOT_DEV" | grep -q "^PARTUUID="; then
     PART_VAL="${ROOT_DEV#PARTUUID=}"
-    ROOT_DEV=$(blkid -t "PARTUUID=$PART_VAL" -o device 2>/dev/null || findfs "$ROOT_DEV" 2>/dev/null || echo "")
+    ROOT_DEV=$(blkid -t "PARTUUID=$PART_VAL" -o device 2>/dev/null || findfs "PARTUUID=$PART_VAL" 2>/dev/null || echo "")
 fi
 
 # Fallback auto-detection of root LV
@@ -117,7 +117,7 @@ if [ "$PREV_BOOT_OK" = "true" ]; then
 
 else
     log_alert "Previous boot was NOT marked as OK (Crash or dirty shutdown detected)!"
-    
+
     # Attempt Rollback to root_b first
     if /sbin/lvm lvs "/dev/$VG_NAME/root_b" >/dev/null 2>&1; then
         log_alert "Rolling back root partition to snapshot root_b..."
@@ -146,6 +146,6 @@ fi
 
 # Ensure all LVM changes are synced and devices ready for mounting
 /sbin/lvm vgchange -ay --ignoreactivationskip >/dev/null 2>&1
-/sbin/lvm udevadm settle >/dev/null 2>&1 || true
+udevadm settle >/dev/null 2>&1 || true
 
 exit 0
