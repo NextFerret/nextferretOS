@@ -42,6 +42,7 @@
 #include <apt-pkg/fileutl.h>
 #include <apt-pkg/tagfile.h>
 #include <apt-pkg/update.h>
+#include <apt-pkg/clean.h>
 #include <memory>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -353,8 +354,8 @@ void show_help() {
     cout << "  " << yellow << "history" << reset << "              Display recent package transaction history log\n\n";
     cout << bold << "Maintenance Commands:" << reset << "\n";
     cout << "  sync                 Refresh repository metadata concurrently with SHA256 validation\n";
-    cout << "  clean                Clear the entire NAPT package download cache\n";
-    cout << "  autoclean            Clear obsolete and stale packages from cache\n\n";
+    cout << "  clean                Clear both the APT and NAPT package download caches\n";
+    cout << "  autoclean            Clear obsolete and stale packages from both APT and NAPT caches\n\n";
     cout << bold << "Transaction Flags:" << reset << "\n";
     cout << "  --apply-host         Skip sandbox test and apply transaction directly to host\n";
     cout << "  --no-seccomp         Disable BPF SECCOMP syscall filtering inside sandbox\n";
@@ -1264,21 +1265,69 @@ bool sync_napt_metadata() {
     return ok;
 }
 
-bool clean_napt_cache() {
+// Clean the traditional APT archives cache (/var/cache/apt/archives/).
+// Removes every regular file in the directory except the 'partial/' subdir
+// (which holds in-flight downloads) and the 'lock' file. Mirrors the behaviour
+// of `apt-get clean` while only touching regular files to stay safe.
+bool clean_apt_archives_cache() {
+    string archives = _config->FindDir("Dir::Cache::archives");
+    if (archives.empty()) archives = "/var/cache/apt/archives/";
+    if (!archives.empty() && archives.back() != '/') archives += "/";
+
+    error_code ec;
+    if (!fs::exists(archives, ec)) {
+        cout << "APT archives directory does not exist: " << archives << "\n";
+        return true;
+    }
+
+    bool removed_any = false;
+    uint64_t bytes_freed = 0;
+
+    for (const auto& entry : fs::directory_iterator(archives, ec)) {
+        if (ec) {
+            cout << "Failed to read APT archives directory: " << archives << "\n";
+            return false;
+        }
+        string name = entry.path().filename().string();
+        // Skip the 'partial' subdir (in-flight downloads) and the 'lock' file.
+        if (name == "partial" || name == "lock") continue;
+
+        error_code fec;
+        if (!entry.is_regular_file(fec)) continue;
+
+        uint64_t sz = entry.file_size(fec);
+        error_code rm_ec;
+        fs::remove(entry.path(), rm_ec);
+        if (!rm_ec) {
+            bytes_freed += sz;
+            removed_any = true;
+        }
+    }
+
+    if (removed_any)
+        cout << "APT archives cleaned: " << archives << "(" << format_bytes(bytes_freed) << " freed)\n";
+    else
+        cout << "APT archives already clean: " << archives << "\n";
+
+    return true;
+}
+
+// Clean the NAPT-owned package cache (/etc/napt/cache/).
+bool clean_napt_cache_only() {
     error_code ec;
     if (!fs::exists(NAPT_CACHE_DIR, ec)) {
         if (!fs::create_directories(NAPT_CACHE_DIR, ec)) {
-            cout << "Failed to create cache directory: " << NAPT_CACHE_DIR << "\n";
+            cout << "Failed to create NAPT cache directory: " << NAPT_CACHE_DIR << "\n";
             return false;
         }
-        cout << "Cache is already clean.\n";
+        cout << "NAPT cache is already clean.\n";
         return true;
     }
 
     bool removed_any = false;
     for (const auto& entry : fs::directory_iterator(NAPT_CACHE_DIR, ec)) {
         if (ec) {
-            cout << "Failed to read cache directory: " << NAPT_CACHE_DIR << "\n";
+            cout << "Failed to read NAPT cache directory: " << NAPT_CACHE_DIR << "\n";
             return false;
         }
         fs::remove_all(entry.path(), ec);
@@ -1290,16 +1339,23 @@ bool clean_napt_cache() {
     }
 
     if (!fs::exists(NAPT_CACHE_DIR, ec) && !fs::create_directories(NAPT_CACHE_DIR, ec)) {
-        cout << "Failed to recreate cache directory: " << NAPT_CACHE_DIR << "\n";
+        cout << "Failed to recreate NAPT cache directory: " << NAPT_CACHE_DIR << "\n";
         return false;
     }
 
     if (removed_any)
-        cout << "Cache cleaned: " << NAPT_CACHE_DIR << "\n";
+        cout << "NAPT cache cleaned: " << NAPT_CACHE_DIR << "\n";
     else
-        cout << "Cache is already clean.\n";
+        cout << "NAPT cache is already clean.\n";
 
     return true;
+}
+
+// Public entry point: clean BOTH the traditional APT cache and the NAPT cache.
+bool clean_napt_cache() {
+    bool apt_ok = clean_apt_archives_cache();
+    bool napt_ok = clean_napt_cache_only();
+    return apt_ok && napt_ok;
 }
 
 string format_bytes(uint64_t bytes) {
@@ -1386,10 +1442,78 @@ public:
 
 vector<NaptRepoMetadata> load_cached_napt_metadata();
 
-bool autoclean_napt_cache() {
+// Subclass of libapt's pkgArchiveCleaner used to remove obsolete .deb files
+// from /var/cache/apt/archives/ (mirrors `apt-get autoclean`). Go() iterates
+// every .deb file in the directory, parses package name + version from the
+// filename, and calls Erase() only for files whose package/version is no
+// longer present as a candidate in the apt cache.
+class NaptArchiveCleaner final : public pkgArchiveCleaner {
+public:
+    size_t   removed_count = 0;
+    uint64_t bytes_freed   = 0;
+protected:
+    void Erase(int const dirfd, char const * const File,
+               string const &Pkg, string const &Ver,
+               struct stat const &St) override {
+        (void)Pkg; (void)Ver;
+        bytes_freed += static_cast<uint64_t>(St.st_size);
+        if (unlinkat(dirfd, File, 0) == 0) {
+            ++removed_count;
+        }
+    }
+};
+
+// Autoclean the traditional APT archives cache using libapt's pkgArchiveCleaner.
+// Removes only .deb files whose package/version is no longer a download
+// candidate - exactly what `apt-get autoclean` does.
+bool autoclean_apt_archives_cache() {
+    pkgCacheFile cache_file;
+    pkgCache* cache = cache_file.GetPkgCache();
+    if (cache == nullptr) {
+        _error->DumpErrors();
+        cout << "Unable to open APT package cache for autoclean.\n";
+        return false;
+    }
+
+    string archives = _config->FindDir("Dir::Cache::archives");
+    if (archives.empty()) archives = "/var/cache/apt/archives/";
+    if (!archives.empty() && archives.back() != '/') archives += "/";
+
+    error_code ec;
+    if (!fs::exists(archives, ec)) {
+        cout << "APT archives directory does not exist: " << archives << "\n";
+        return true;
+    }
+    // libapt's pkgArchiveCleaner requires the 'partial' subdir to exist.
+    if (!fs::exists(archives + "partial", ec)) {
+        cout << "APT archives partial directory missing, skipping APT autoclean: "
+             << archives << "partial/\n";
+        return true;
+    }
+
+    NaptArchiveCleaner cleaner;
+    if (!cleaner.Go(archives, *cache)) {
+        _error->DumpErrors();
+        cout << "APT autoclean encountered errors while cleaning: " << archives << "\n";
+        return false;
+    }
+    _error->DumpErrors();
+
+    if (cleaner.removed_count > 0) {
+        cout << "APT autoclean removed " << cleaner.removed_count
+             << " obsolete .deb file(s) (" << format_bytes(cleaner.bytes_freed) << " freed)\n";
+    } else {
+        cout << "APT archives: no obsolete packages found.\n";
+    }
+    return true;
+}
+
+// Autoclean the NAPT-owned package cache. Removes cached .deb files whose
+// filename is no longer listed in any known NAPT repository metadata.
+bool autoclean_napt_cache_only() {
     error_code ec;
     if (!fs::exists(NAPT_CACHE_DIR, ec)) {
-        cout << "Cache directory does not exist: " << NAPT_CACHE_DIR << "\n";
+        cout << "NAPT cache directory does not exist: " << NAPT_CACHE_DIR << "\n";
         return true;
     }
 
@@ -1414,7 +1538,7 @@ bool autoclean_napt_cache() {
                 if (!ec) bytes_freed += sz;
                 fs::remove(file_entry.path(), ec);
                 if (!ec) {
-                    cout << "Autoclean removed stale package: " << filename << "\n";
+                    cout << "NAPT autoclean removed stale package: " << filename << "\n";
                     removed_any = true;
                 }
             }
@@ -1422,11 +1546,18 @@ bool autoclean_napt_cache() {
     }
 
     if (removed_any) {
-        cout << "Autoclean finished. Space freed: " << format_bytes(bytes_freed) << "\n";
+        cout << "NAPT autoclean finished. Space freed: " << format_bytes(bytes_freed) << "\n";
     } else {
-        cout << "Cache is already clean. No obsolete packages found.\n";
+        cout << "NAPT cache is already clean. No obsolete packages found.\n";
     }
     return true;
+}
+
+// Public entry point: autoclean BOTH the traditional APT cache and the NAPT cache.
+bool autoclean_napt_cache() {
+    bool apt_ok = autoclean_apt_archives_cache();
+    bool napt_ok = autoclean_napt_cache_only();
+    return apt_ok && napt_ok;
 }
 
 void print_install_already_present_message(const string& pkg_name, bool is_upgrade) {
