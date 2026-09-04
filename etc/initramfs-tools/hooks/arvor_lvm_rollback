@@ -1,22 +1,17 @@
 #!/bin/sh
 # /etc/initramfs-tools/hooks/arvor_lvm_rollback
 # Ensures LVM2 binaries, thin provisioning tools, and utilities are available in the initramfs.
-
 PREREQ=""
-
 prereqs() {
     echo "$PREREQ"
 }
-
 case "$1" in
     prereqs)
         prereqs
         exit 0
         ;;
 esac
-
 . /usr/share/initramfs-tools/hook-functions
-
 # Copy required LVM2 tools
 copy_exec /sbin/lvm /sbin
 copy_exec /sbin/lvcreate /sbin
@@ -26,7 +21,6 @@ copy_exec /sbin/lvconvert /sbin
 copy_exec /sbin/lvchange /sbin
 copy_exec /sbin/lvs /sbin
 copy_exec /sbin/vgs /sbin
-
 # Copy thin provisioning tools if present
 if [ -x /usr/sbin/thin_check ]; then
     copy_exec /usr/sbin/thin_check /usr/sbin
@@ -37,10 +31,29 @@ fi
 if [ -x /usr/sbin/thin_repair ]; then
     copy_exec /usr/sbin/thin_repair /usr/sbin
 fi
-
+# Copy device/UUID resolution tools (required for root=UUID=/PARTUUID= parsing)
+copy_exec /sbin/blkid /sbin
+if [ -x /sbin/findfs ]; then
+    copy_exec /sbin/findfs /sbin
+elif [ -x /usr/sbin/findfs ]; then
+    copy_exec /usr/sbin/findfs /usr/sbin
+fi
+# Copy udevadm (needed for real "settle" calls, not "lvm udevadm")
+if [ -x /sbin/udevadm ]; then
+    copy_exec /sbin/udevadm /sbin
+elif [ -x /bin/udevadm ]; then
+    copy_exec /bin/udevadm /bin
+elif [ -x /usr/bin/udevadm ]; then
+    copy_exec /usr/bin/udevadm /usr/bin
+fi
+# Copy plymouth client if present (optional rollback UI message)
+if [ -x /bin/plymouth ]; then
+    copy_exec /bin/plymouth /bin
+elif [ -x /usr/bin/plymouth ]; then
+    copy_exec /usr/bin/plymouth /usr/bin
+fi
 # Copy filesystem detection and string helpers
 copy_exec /usr/bin/findmnt /usr/bin || true
 copy_exec /bin/sed /bin || true
 copy_exec /usr/bin/cut /usr/bin || true
-
 exit 0
