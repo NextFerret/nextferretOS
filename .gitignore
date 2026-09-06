@@ -1,2 +1,13 @@
+# Python cache
 __pycache__/
 *.py[cod]
+*$py.class
+
+# Build artifacts & binaries
+*.o
+napt
+nsm
+nlc
+*.iso
+*.sha256
+*.bak
