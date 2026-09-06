@@ -50,14 +50,6 @@ FILES = [
     "/etc/napt/sources.list",
     "/usr/bin/nlc",
     "/usr/bin/nsmd_start",
-    "/etc/nextferretinst/translations.json",
-    "/etc/initramfs-tools/hooks/arvor_lvm_rollback",
-    "/etc/initramfs-tools/scripts/local-top/arvor_lvm_snapshot",
-    "/usr/bin/arvor-boot-success",
-    "/etc/systemd/system/arvor-boot-success.service",
-    "/etc/systemd/system/arvor-guard.service",
-    "/etc/systemd/system/arvor-guard.timer",
-    "/etc/grub.d/10_arvor_snapshots",
     "/etc/motd"
 ]
 
