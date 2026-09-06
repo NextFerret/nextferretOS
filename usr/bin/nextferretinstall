@@ -676,8 +676,8 @@ cat << 'EOF' > /etc/grub.d/11_arvor_recovery
 exec tail -n +3 $0
 menuentry "Arvor Linux Recovery Mode" --class arvor --class recovery {{
     search --no-floppy --set=root --label ARVOR_RECOVERY
-    linux /live/vmlinuz boot=live toram components quiet splash arvor_recovery=1
-    initrd /live/initrd.img
+    linux /boot/vmlinuz root=LABEL=ARVOR_RECOVERY rw quiet splash
+    initrd /boot/initrd.img
 }}
 EOF
 chmod +x /etc/grub.d/11_arvor_recovery || true
@@ -715,45 +715,97 @@ exit 0
         self.progress.emit(90)
 
         # Setup and populate dedicated Recovery partition (p3)
-        self.log_msg.emit("Configuring dedicated Arvor Recovery partition...")
+        self.log_msg.emit("Configuring dedicated Arvor Recovery partition (debootstrap)...")
         rec_mnt = "/mnt/recovery_staging"
         os.makedirs(rec_mnt, exist_ok=True)
         self.run_cmd(f"mount {p3} {rec_mnt}")
-        os.makedirs(f"{rec_mnt}/live", exist_ok=True)
-        os.makedirs(f"{rec_mnt}/boot/grub", exist_ok=True)
 
-        squash_candidates = [
-            "/run/live/medium/live/arvor_recovery.squashfs",
-            "/tmp/arvor_recovery.squashfs",
-            "/run/live/medium/live/filesystem.squashfs",
-            "/tmp/iso_build/live/filesystem.squashfs",
-            "/lib/live/mount/medium/live/filesystem.squashfs"
+        # 1. Debootstrap standalone minimal base for recovery
+        deb_rec_cmd = (
+            f"debootstrap --variant=minbase --arch=amd64 "
+            f"--include=python3,python3-pyqt6,lvm2,xfsprogs,e2fsprogs,parted,util-linux,pciutils,iproute2,systemd-sysv,bash,coreutils,kmod,linux-image-amd64,sudo,rsync,grub-efi-amd64-signed "
+            f"trixie {rec_mnt} http://deb.debian.org/debian"
+        )
+        if not self.run_cmd(deb_rec_cmd):
+            self.log_msg.emit("Recovery debootstrap network failed, falling back to base sync from target...")
+            self.run_cmd(f"rsync -aHAX --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/* --exclude=/tmp/* --exclude=/home/* --exclude=/root/* --exclude=/boot/efi/* {self.mount}/ {rec_mnt}/")
+
+        # 2. Configure credentials in recovery: root (root:root) and default user arvor (arvor:arvor with sudo)
+        self.run_cmd(f'chroot {rec_mnt} /bin/sh -c "echo \"root:root\" | chpasswd"')
+        self.run_cmd(f'chroot {rec_mnt} /bin/sh -c "id -u arvor >/dev/null 2>&1 || useradd -m -s /bin/bash -G sudo arvor && echo \"arvor:arvor\" | chpasswd"')
+
+        # 3. Install Arvor Recovery binaries and application
+        rec_src_candidates = [
+            "/usr/lib/arvor-recovery",
+            "/home/yrozxm/Projectos/arvor-recovery-main",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../arvor-recovery-main"),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "../lib/arvor-recovery")
         ]
-        for sq in squash_candidates:
-            if os.path.exists(sq):
-                self.run_cmd(f"cp {sq} {rec_mnt}/live/filesystem.squashfs")
+        rec_src = None
+        for cand in rec_src_candidates:
+            if os.path.isdir(os.path.join(cand, "core")):
+                rec_src = cand
                 break
 
-        rec_vmlinuz = None
-        rec_initrd = None
-        for live_path in ["/run/live/medium/live", "/tmp/iso_build/live", "/lib/live/mount/medium/live"]:
-            if os.path.exists(f"{live_path}/vmlinuz"):
-                rec_vmlinuz = f"{live_path}/vmlinuz"
-                rec_initrd = f"{live_path}/initrd.img"
-                break
+        if rec_src:
+            os.makedirs(f"{rec_mnt}/usr/lib/arvor-recovery", exist_ok=True)
+            for sub in ["core", "ui", "assets"]:
+                src_sub = os.path.join(rec_src, sub)
+                if os.path.exists(src_sub):
+                    self.run_cmd(f"cp -a {src_sub} {rec_mnt}/usr/lib/arvor-recovery/")
+            bin_src = os.path.join(rec_src, "bin", "arvor-recovery")
+            if os.path.exists(bin_src):
+                self.run_cmd(f"cp {bin_src} {rec_mnt}/usr/bin/arvor-recovery")
+                self.run_cmd(f"chmod +x {rec_mnt}/usr/bin/arvor-recovery")
+        elif os.path.exists("/usr/bin/arvor-recovery"):
+            self.run_cmd(f"cp /usr/bin/arvor-recovery {rec_mnt}/usr/bin/arvor-recovery")
+            self.run_cmd(f"chmod +x {rec_mnt}/usr/bin/arvor-recovery")
 
-        if not rec_vmlinuz and os.path.exists(f"{self.mount}/boot"):
+        # 4. Configure autologin on TTY1 to launch arvor-recovery
+        override_dir = f"{rec_mnt}/etc/systemd/system/getty@tty1.service.d"
+        os.makedirs(override_dir, exist_ok=True)
+        try:
+            with open(f"{override_dir}/override.conf", "w") as f:
+                f.write("""[Service]
+ExecStart=
+ExecStart=-/usr/bin/arvor-recovery
+StandardInput=tty
+StandardOutput=tty
+Restart=always
+RestartSec=1
+""")
+        except Exception as e:
+            self.log_msg.emit(f"WARN: Failed writing tty1 override: {e}")
+
+        # 5. Recovery fstab
+        try:
+            with open(f"{rec_mnt}/etc/fstab", "w") as f:
+                f.write("LABEL=ARVOR_RECOVERY  /  ext4  defaults  0  1\n")
+        except Exception as e:
+            self.log_msg.emit(f"WARN: Failed writing recovery fstab: {e}")
+
+        # 6. Ensure kernel and initrd in {rec_mnt}/boot
+        os.makedirs(f"{rec_mnt}/boot/grub", exist_ok=True)
+        if os.path.exists(f"{rec_mnt}/boot"):
+            b_files = os.listdir(f"{rec_mnt}/boot")
+            vms = sorted([f for f in b_files if f.startswith("vmlinuz-")])
+            inis = sorted([f for f in b_files if f.startswith("initrd.img-")])
+            if vms and not os.path.exists(f"{rec_mnt}/boot/vmlinuz"):
+                try: os.symlink(vms[-1], f"{rec_mnt}/boot/vmlinuz")
+                except: self.run_cmd(f"cp {rec_mnt}/boot/{vms[-1]} {rec_mnt}/boot/vmlinuz")
+            if inis and not os.path.exists(f"{rec_mnt}/boot/initrd.img"):
+                try: os.symlink(inis[-1], f"{rec_mnt}/boot/initrd.img")
+                except: self.run_cmd(f"cp {rec_mnt}/boot/{inis[-1]} {rec_mnt}/boot/initrd.img")
+
+        # If kernel missing on recovery partition, copy from main system boot
+        if not os.path.exists(f"{rec_mnt}/boot/vmlinuz") and os.path.exists(f"{self.mount}/boot"):
             b_files = os.listdir(f"{self.mount}/boot")
             vms = sorted([f for f in b_files if f.startswith("vmlinuz-")])
             inis = sorted([f for f in b_files if f.startswith("initrd.img-")])
-            if vms: rec_vmlinuz = f"{self.mount}/boot/{vms[-1]}"
-            if inis: rec_initrd = f"{self.mount}/boot/{inis[-1]}"
+            if vms: self.run_cmd(f"cp {self.mount}/boot/{vms[-1]} {rec_mnt}/boot/vmlinuz")
+            if inis: self.run_cmd(f"cp {self.mount}/boot/{inis[-1]} {rec_mnt}/boot/initrd.img")
 
-        if rec_vmlinuz and os.path.exists(rec_vmlinuz):
-            self.run_cmd(f"cp {rec_vmlinuz} {rec_mnt}/live/vmlinuz")
-        if rec_initrd and os.path.exists(rec_initrd):
-            self.run_cmd(f"cp {rec_initrd} {rec_mnt}/live/initrd.img")
-
+        # 7. Write recovery GRUB configuration
         grub_rec_content = """set default=0
 set timeout=5
 
@@ -767,13 +819,13 @@ insmod gfxterm
 search --no-floppy --set=root --label ARVOR_RECOVERY
 
 menuentry "Arvor Linux Recovery Mode (Safe Environment)" --class arvor --class gnu-linux --class os {
-    linux /live/vmlinuz boot=live toram components quiet splash arvor_recovery=1 rd.live.image
-    initrd /live/initrd.img
+    linux /boot/vmlinuz root=LABEL=ARVOR_RECOVERY rw quiet splash
+    initrd /boot/initrd.img
 }
 
 menuentry "Arvor Linux Recovery Mode (Debug Verbose Console)" --class arvor --class gnu-linux --class os {
-    linux /live/vmlinuz boot=live toram components debug verbose arvor_recovery=1 rd.live.image systemd.debug_shell=1
-    initrd /live/initrd.img
+    linux /boot/vmlinuz root=LABEL=ARVOR_RECOVERY rw debug verbose systemd.debug_shell=1
+    initrd /boot/initrd.img
 }
 
 menuentry "Return to Main OS Bootloader" {

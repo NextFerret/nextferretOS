@@ -164,6 +164,20 @@ Recommended:
 
 ---
 
+# Default Credentials
+
+Fresh installations and recovery deployments are configured with the following default accounts:
+
+| User | Password | Permissions | Description |
+| --- | --- | --- | --- |
+| `root` | `root` | Superuser | System administrator account |
+| `arvor` | `arvor` | `sudo` | Default standard user with sudo privileges |
+
+> [!TIP]
+> It is strongly recommended to change these default passwords upon first login with `passwd` and `passwd arvor`.
+
+---
+
 # Architecture
 
 Arvor intentionally avoids technologies commonly used by immutable distributions.
