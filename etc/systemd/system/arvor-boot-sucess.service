@@ -1,0 +1,13 @@
+[Unit]
+Description=Arvor Boot Success Marker Service
+Documentation=https://github.com/NextFerret/arvor
+After=multi-user.target graphical.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/arvor-boot-success
+
+[Install]
+WantedBy=multi-user.target
