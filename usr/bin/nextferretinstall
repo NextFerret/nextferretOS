@@ -11,15 +11,26 @@ import tempfile
 import urllib.request
 import time
 import base64
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                             QHBoxLayout, QLabel, QPushButton, QComboBox,
-                             QLineEdit, QCheckBox, QStackedWidget, QMessageBox,
-                             QTextEdit, QListWidget, QListWidgetItem, QFrame,
-                             QGraphicsDropShadowEffect, QProgressBar, QListView,
-                             QGridLayout, QScrollArea)
-from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent, QTimer, QByteArray
-from PyQt6.QtSvg import QSvgRenderer
+try:
+    from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                                 QHBoxLayout, QLabel, QPushButton, QComboBox,
+                                 QLineEdit, QCheckBox, QStackedWidget, QMessageBox,
+                                 QTextEdit, QListWidget, QListWidgetItem, QFrame,
+                                 QGraphicsDropShadowEffect, QProgressBar, QListView,
+                                 QGridLayout, QScrollArea)
+    from PyQt6.QtGui import QIcon, QPixmap, QColor, QPainter
+    from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent, QTimer, QByteArray
+    from PyQt6.QtSvg import QSvgRenderer
+except ImportError:
+    from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                                 QHBoxLayout, QLabel, QPushButton, QComboBox,
+                                 QLineEdit, QCheckBox, QStackedWidget, QMessageBox,
+                                 QTextEdit, QListWidget, QListWidgetItem, QFrame,
+                                 QGraphicsDropShadowEffect, QProgressBar, QListView,
+                                 QGridLayout, QScrollArea)
+    from PySide6.QtGui import QIcon, QPixmap, QColor, QPainter
+    from PySide6.QtCore import Qt, QThread, Signal as pyqtSignal, QEvent, QTimer, QByteArray
+    from PySide6.QtSvg import QSvgRenderer
 
 class _ComboFixer:
     def fix(self, combo):
@@ -46,7 +57,7 @@ FILES = [
     "/etc/systemd/system/arvor-boot-success.service",
     "/etc/systemd/system/arvor-guard.service",
     "/etc/systemd/system/arvor-guard.timer",
-    "/etc/grub.d/10_arvor_snapshots"
+    "/etc/grub.d/10_arvor_snapshots",
     "/etc/motd"
 ]
 
@@ -353,7 +364,8 @@ class InstallWorker(QThread):
         self.run_cmd(f"parted -s {d} mkpart ESP fat32 1MiB 513MiB")
         self.run_cmd(f"parted -s {d} set 1 esp on")
         self.run_cmd(f"parted -s {d} mkpart BOOT ext4 513MiB 1537MiB")
-        self.run_cmd(f"parted -s {d} mkpart LVM 1537MiB 100%")
+        self.run_cmd(f"parted -s {d} mkpart RECOVERY ext4 1537MiB 6657MiB")
+        self.run_cmd(f"parted -s {d} mkpart LVM 6657MiB 100%")
         
         self.run_cmd(f"partprobe {d}")
         self.run_cmd("udevadm settle")
@@ -362,14 +374,14 @@ class InstallWorker(QThread):
         self.progress.emit(15)
 
         sep = "p" if "nvme" in d else ""
-        p1, p2, p3 = f"{d}{sep}1", f"{d}{sep}2", f"{d}{sep}3"
+        p1, p2, p3, p4 = f"{d}{sep}1", f"{d}{sep}2", f"{d}{sep}3", f"{d}{sep}4"
 
         if self.conf["luks"]:
-            self.run_cmd(f"cryptsetup luksFormat --type luks2 {p3} -", self.conf["luks_pass"])
-            self.run_cmd(f"cryptsetup open {p3} {self.mapper} -", self.conf["luks_pass"])
+            self.run_cmd(f"cryptsetup luksFormat --type luks2 {p4} -", self.conf["luks_pass"])
+            self.run_cmd(f"cryptsetup open {p4} {self.mapper} -", self.conf["luks_pass"])
             lvm_dev = f"/dev/mapper/{self.mapper}"
         else:
-            lvm_dev = p3
+            lvm_dev = p4
 
         self.run_cmd(f"pvcreate -ff -y {lvm_dev}")
         self.run_cmd(f"vgcreate arvor_vg {lvm_dev}")
@@ -401,6 +413,7 @@ class InstallWorker(QThread):
 
         self.run_cmd(f"mkfs.vfat -F32 {p1}")
         self.run_cmd(f"mkfs.ext4 -F {p2}")
+        self.run_cmd(f"mkfs.ext4 -F -L ARVOR_RECOVERY {p3}")
         self.run_cmd(f"mkfs.xfs -f {root_dev}")
               
         self.run_cmd("udevadm settle")
@@ -410,11 +423,11 @@ class InstallWorker(QThread):
         u_root = Sys.get_uuid(root_dev)
         u_boot = Sys.get_uuid(p2)
         u_efi = Sys.get_uuid(p1)
-        u_p3 = Sys.get_uuid(p3) if self.conf["luks"] else ""
+        u_p4 = Sys.get_uuid(p4) if self.conf["luks"] else ""
         f_root = f"UUID={u_root}" if u_root else root_dev
         f_boot = f"UUID={u_boot}" if u_boot else p2
         f_efi = f"UUID={u_efi}" if u_efi else p1
-        f_p3 = f"UUID={u_p3}" if u_p3 else p3
+        f_p4 = f"UUID={u_p4}" if u_p4 else p4
 
         if "UUID=" not in f_root:
             self.log_msg.emit("WARNING: UUID detection failed, using absolute paths in fstab.")
@@ -505,7 +518,7 @@ cat << EOF > /etc/fstab
 EOF
 """
         if self.conf["luks"]:
-            luks_sh = f'echo "{self.mapper} UUID={u_p3} none luks" > /etc/crypttab'
+            luks_sh = f'echo "{self.mapper} UUID={u_p4} none luks" > /etc/crypttab'
         else:
             luks_sh = ""
             
@@ -658,10 +671,36 @@ touch /etc/default/grub
 sed -i 's|^GRUB_CMDLINE_LINUX=.*|GRUB_CMDLINE_LINUX="rd.lvm.lv=arvor_vg/root"|' /etc/default/grub || true
 grep -q "rd.lvm.lv" /etc/default/grub || echo 'GRUB_CMDLINE_LINUX="rd.lvm.lv=arvor_vg/root"' >> /etc/default/grub
 
+cat << 'EOF' > /etc/grub.d/11_arvor_recovery
+#!/bin/sh
+exec tail -n +3 $0
+menuentry "Arvor Linux Recovery Mode" --class arvor --class recovery {{
+    search --no-floppy --set=root --label ARVOR_RECOVERY
+    linux /live/vmlinuz boot=live toram components quiet splash arvor_recovery=1
+    initrd /live/initrd.img
+}}
+EOF
+chmod +x /etc/grub.d/11_arvor_recovery || true
 
 update-initramfs -c -k all || update-initramfs -u
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=arvor-linux --removable || true
+
+mkdir -p /boot/efi/EFI/arvor-recovery
+if [ -f /boot/efi/EFI/arvor-linux/grubx64.efi ]; then
+    cp -a /boot/efi/EFI/arvor-linux/grubx64.efi /boot/efi/EFI/arvor-recovery/grubx64.efi
+fi
+cat << 'EOF' > /boot/efi/EFI/arvor-recovery/grub.cfg
+search --no-floppy --set=root --label ARVOR_RECOVERY
+configfile /boot/grub/grub.cfg
+EOF
+
+EXISTING_REC=$(efibootmgr | grep "Arvor Linux Recovery" | awk '{{print $1}}' | tr -d 'Boot*' | tr -d ':' || true)
+if [ -n "$EXISTING_REC" ]; then
+    efibootmgr -b "$EXISTING_REC" -B >/dev/null 2>&1 || true
+fi
+
 efibootmgr -c -d {self.conf["disk"]} -p 1 -L "Arvor Linux" -l "\\EFI\\arvor-linux\\grubx64.efi" || true
+efibootmgr -c -d {self.conf["disk"]} -p 1 -L "Arvor Linux Recovery" -l "\\EFI\\arvor-recovery\\grubx64.efi" || true
 update-grub
 
 napt sync
@@ -673,6 +712,90 @@ exit 0
         with open(chroot_script_path, "w") as f: f.write(script)
         self.run_cmd(f"chmod +x {chroot_script_path}")
         self.run_cmd(f"chroot {self.mount} /s.sh")
+        self.progress.emit(90)
+
+        # Setup and populate dedicated Recovery partition (p3)
+        self.log_msg.emit("Configuring dedicated Arvor Recovery partition...")
+        rec_mnt = "/mnt/recovery_staging"
+        os.makedirs(rec_mnt, exist_ok=True)
+        self.run_cmd(f"mount {p3} {rec_mnt}")
+        os.makedirs(f"{rec_mnt}/live", exist_ok=True)
+        os.makedirs(f"{rec_mnt}/boot/grub", exist_ok=True)
+
+        squash_candidates = [
+            "/run/live/medium/live/arvor_recovery.squashfs",
+            "/tmp/arvor_recovery.squashfs",
+            "/run/live/medium/live/filesystem.squashfs",
+            "/tmp/iso_build/live/filesystem.squashfs",
+            "/lib/live/mount/medium/live/filesystem.squashfs"
+        ]
+        for sq in squash_candidates:
+            if os.path.exists(sq):
+                self.run_cmd(f"cp {sq} {rec_mnt}/live/filesystem.squashfs")
+                break
+
+        rec_vmlinuz = None
+        rec_initrd = None
+        for live_path in ["/run/live/medium/live", "/tmp/iso_build/live", "/lib/live/mount/medium/live"]:
+            if os.path.exists(f"{live_path}/vmlinuz"):
+                rec_vmlinuz = f"{live_path}/vmlinuz"
+                rec_initrd = f"{live_path}/initrd.img"
+                break
+
+        if not rec_vmlinuz and os.path.exists(f"{self.mount}/boot"):
+            b_files = os.listdir(f"{self.mount}/boot")
+            vms = sorted([f for f in b_files if f.startswith("vmlinuz-")])
+            inis = sorted([f for f in b_files if f.startswith("initrd.img-")])
+            if vms: rec_vmlinuz = f"{self.mount}/boot/{vms[-1]}"
+            if inis: rec_initrd = f"{self.mount}/boot/{inis[-1]}"
+
+        if rec_vmlinuz and os.path.exists(rec_vmlinuz):
+            self.run_cmd(f"cp {rec_vmlinuz} {rec_mnt}/live/vmlinuz")
+        if rec_initrd and os.path.exists(rec_initrd):
+            self.run_cmd(f"cp {rec_initrd} {rec_mnt}/live/initrd.img")
+
+        grub_rec_content = """set default=0
+set timeout=5
+
+insmod part_gpt
+insmod part_msdos
+insmod ext2
+insmod fat
+insmod font
+insmod gfxterm
+
+search --no-floppy --set=root --label ARVOR_RECOVERY
+
+menuentry "Arvor Linux Recovery Mode (Safe Environment)" --class arvor --class gnu-linux --class os {
+    linux /live/vmlinuz boot=live toram components quiet splash arvor_recovery=1 rd.live.image
+    initrd /live/initrd.img
+}
+
+menuentry "Arvor Linux Recovery Mode (Debug Verbose Console)" --class arvor --class gnu-linux --class os {
+    linux /live/vmlinuz boot=live toram components debug verbose arvor_recovery=1 rd.live.image systemd.debug_shell=1
+    initrd /live/initrd.img
+}
+
+menuentry "Return to Main OS Bootloader" {
+    search --no-floppy --set=root --file /EFI/arvor-linux/grubx64.efi
+    chainloader /EFI/arvor-linux/grubx64.efi
+}
+
+menuentry "UEFI Firmware Settings" {
+    fwsetup
+}
+
+menuentry "Reboot System" {
+    reboot
+}
+"""
+        try:
+            with open(f"{rec_mnt}/boot/grub/grub.cfg", "w") as f:
+                f.write(grub_rec_content)
+        except Exception as e:
+            self.log_msg.emit(f"WARN: Failed to write recovery grub.cfg: {e}")
+
+        self.run_cmd(f"umount {rec_mnt}")
         self.progress.emit(95)
 
         for m in ["/run", "/sys", "/proc", "/dev/pts", "/dev"]: 
